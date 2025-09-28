@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id            Int           @id @default(autoincrement())
+  name          String
+  code          String?       @unique
+  contactPerson String?
+  hourlyRate    Decimal       @db.Decimal(10, 2)
+  kmRate        Decimal       @db.Decimal(10, 2)
+  address       String?
+  ico           String?
+  dic           String?
+  email         String?
+  phone         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  createdBy     Int?
+  
+  services      Service[]
+  workRecords   WorkRecord[]  @relation("WorkRecordOrganization")
+  billedRecords WorkRecord[]  @relation("WorkRecordBillingOrg")
+  hardware      Hardware[]
+  invoices      Invoice[]
+}
+
+model Service {
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  serviceName    String
+  description    String?
+  monthlyPrice   Decimal      @db.Decimal(10, 2)
+  isActive       Boolean      @default(true)
+  
+  organization   Organization @relation(fields: [organizationId], references: [id])
+}
+
+model WorkRecord {
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  date           DateTime
+  worker         String
+  description    String
+  minutes        Int          @default(0)
+  kilometers     Int          @default(0)
+  month          Int?
+  year           Int?
+  price          Decimal?     @db.Decimal(10, 2)
+  projectCode    String?      // Kód zakázky (např. "O - Oresi", "DOH - Oresi - Dohnal")
+  billingOrgId   Int?         // ID organizace pro fakturaci (pokud se liší od organizationId)
+  createdAt      DateTime     @default(now())
+  createdBy      Int?
+  
+  organization   Organization @relation(fields: [organizationId], references: [id], name: "WorkRecordOrganization")
+  billingOrg     Organization? @relation(fields: [billingOrgId], references: [id], name: "WorkRecordBillingOrg")
+  
+  @@index([month, year])
+  @@index([projectCode])
+}
+
+model Hardware {
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  itemName       String
+  description    String?
+  quantity       Int
+  unitPrice      Decimal      @db.Decimal(10, 2)
+  totalPrice     Decimal      @db.Decimal(10, 2)
+  month          Int
+  year           Int
+  
+  organization   Organization @relation(fields: [organizationId], references: [id])
+}
+
+model Invoice {
+  id             Int          @id @default(autoincrement())
+  organizationId Int
+  invoiceNumber  String       @unique
+  month          Int
+  year           Int
+  totalAmount    Decimal      @db.Decimal(10, 2)
+  totalVat       Decimal      @db.Decimal(10, 2)
+  status         InvoiceStatus @default(DRAFT)
+  generatedAt    DateTime     @default(now())
+  pdfUrl         String?
+  pohodaXml      String?
+  notes          String?
+  
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  
+  @@index([month, year])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  CANCELLED
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  name      String
+  role      UserRole @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum UserRole {
+  ADMIN
+  USER
+  VIEWER
+}
