@@ -75,9 +75,7 @@ export default function Organizations() {
       
       if (response.ok) {
         const data = await response.json();
-        console.log('API response:', data);
         const orgs = Array.isArray(data) ? data : (data.data || []);
-        console.log('Organizations loaded:', orgs.length);
         setOrganizations(orgs);
         calculateStats(orgs);
       }

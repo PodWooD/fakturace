@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -12,8 +12,8 @@ model Organization {
   name          String
   code          String?       @unique
   contactPerson String?
-  hourlyRate    Decimal       @db.Decimal(10, 2)
-  kmRate        Decimal       @db.Decimal(10, 2)
+  hourlyRate    Decimal       
+  kmRate        Decimal       
   address       String?
   ico           String?
   dic           String?
@@ -35,7 +35,7 @@ model Service {
   organizationId Int
   serviceName    String
   description    String?
-  monthlyPrice   Decimal      @db.Decimal(10, 2)
+  monthlyPrice   Decimal      
   isActive       Boolean      @default(true)
   
   organization   Organization @relation(fields: [organizationId], references: [id])
@@ -51,7 +51,7 @@ model WorkRecord {
   kilometers     Int          @default(0)
   month          Int?
   year           Int?
-  price          Decimal?     @db.Decimal(10, 2)
+  price          Decimal?     
   projectCode    String?      // Kód zakázky (např. "O - Oresi", "DOH - Oresi - Dohnal")
   billingOrgId   Int?         // ID organizace pro fakturaci (pokud se liší od organizationId)
   createdAt      DateTime     @default(now())
@@ -70,8 +70,8 @@ model Hardware {
   itemName       String
   description    String?
   quantity       Int
-  unitPrice      Decimal      @db.Decimal(10, 2)
-  totalPrice     Decimal      @db.Decimal(10, 2)
+  unitPrice      Decimal      
+  totalPrice     Decimal      
   month          Int
   year           Int
   
@@ -84,9 +84,9 @@ model Invoice {
   invoiceNumber  String       @unique
   month          Int
   year           Int
-  totalAmount    Decimal      @db.Decimal(10, 2)
-  totalVat       Decimal      @db.Decimal(10, 2)
-  status         InvoiceStatus @default(DRAFT)
+  totalAmount    Decimal      
+  totalVat       Decimal      
+  status         String @default("DRAFT")
   generatedAt    DateTime     @default(now())
   pdfUrl         String?
   pohodaXml      String?
@@ -97,25 +97,12 @@ model Invoice {
   @@index([month, year])
 }
 
-enum InvoiceStatus {
-  DRAFT
-  SENT
-  PAID
-  CANCELLED
-}
-
 model User {
   id        Int      @id @default(autoincrement())
   email     String   @unique
   password  String
   name      String
-  role      UserRole @default(USER)
+  role      String @default("USER")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-}
-
-enum UserRole {
-  ADMIN
-  USER
-  VIEWER
 }

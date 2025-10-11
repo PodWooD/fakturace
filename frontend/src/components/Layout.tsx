@@ -25,6 +25,8 @@ export default function Layout({ children, user }: LayoutProps) {
     { name: '⏱️ Výkazy práce', href: '/work-records' },
     { name: '📄 Faktury', href: '/invoices' },
     { name: '📥 Import dat', href: '/import' },
+    { name: '📤 Export', href: '/export' },
+    { name: '📈 Reporty', href: '/reports' },
   ];
 
   return (
