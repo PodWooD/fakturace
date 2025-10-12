@@ -28,6 +28,7 @@ Systém automatizované fakturace pro IT služby, který umožňuje import praco
 - ✅ Export do Pohody (XML formát)
 - ✅ Správa paušálních služeb
 - ✅ Evidence fakturovaného hardware
+- ✅ **Responzivní design** - plná podpora mobilů a tabletů
 
 ---
 
@@ -456,6 +457,115 @@ Authorization: Bearer <token>
 - Stavy faktur
 - Hromadné akce
 - Export do PDF/XML
+
+---
+
+## 📱 Responzivní design
+
+Aplikace je **plně responzivní** a optimalizovaná pro všechna zařízení.
+
+### Implementace
+
+**Soubory:**
+- `/frontend/src/components/Layout.tsx` - Responzivní layout s hamburger menu
+- `/frontend/src/styles/globals.css` - CSS media queries a responzivní styly
+
+**Breakpointy:**
+```css
+@media (max-width: 768px)          /* Mobilní zařízení */
+@media (min-width: 769px) and (max-width: 1024px)  /* Tablety */
+@media (min-width: 1025px)         /* Desktop */
+```
+
+### Funkce podle zařízení
+
+**📱 Mobilní (< 768px):**
+- Hamburger menu (☰) pro navigaci
+- Vysouvací mobilní menu shora
+- Touch-optimalizovaná tlačítka (min-height: 44px)
+- 1-column grid layout
+- Horizontal scroll pro tabulky
+- Menší fonty a padding pro lepší využití prostoru
+
+**📲 Tablety (768px - 1024px):**
+- 2-column grid layout
+- Kompaktnější navigace
+- Touch-friendly rozhraní
+- Optimalizované velikosti fontů
+
+**🖥️ Desktop (> 1024px):**
+- Plná horizontální navigace
+- Multi-column layouts
+- Hover efekty
+- Optimalizováno pro myš a klávesnici
+
+### Testování responzivity
+
+**Chrome DevTools:**
+```bash
+1. F12 (otevřít DevTools)
+2. Ctrl + Shift + M (Device Mode)
+3. Vybrat zařízení (iPhone, iPad, apod.)
+4. Refresh stránku (F5)
+```
+
+**Firefox Responsive Design Mode:**
+```bash
+1. Ctrl + Shift + M
+2. Vybrat rozlišení nebo zařízení
+```
+
+**Skutečné mobilní zařízení:**
+```bash
+# Najít IP adresu serveru
+ip addr show
+
+# Na mobilu otevřít
+http://[SERVER_IP]:3030
+```
+
+### CSS architektura
+
+```css
+/* Hlavní responsive prvky */
+.mobile-menu-button  - Hamburger tlačítko (3 čárky)
+.mobile-nav          - Mobilní navigační panel
+.desktop-nav         - Desktop navigace
+.app-header          - Sticky header
+.main-content        - Responzivní hlavní obsah
+
+/* Touch optimalizace */
+@media (hover: none) and (pointer: coarse) {
+  button, a, input { min-height: 44px; }
+}
+```
+
+### Hamburger menu
+
+**Funkce:**
+- Zobrazuje se na zařízeních < 768px
+- 3 horizontální čárky jako tlačítko
+- Kliknutím se vysouvá menu shora
+- Obsahuje všechny navigační položky + user info
+- Auto-close při kliknutí na položku
+
+**State management:**
+```typescript
+const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+// Toggle při kliknutí na hamburger
+onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+```
+
+**Animace:**
+```css
+.mobile-nav {
+  max-height: 0;
+  transition: max-height 0.3s ease-in-out;
+}
+.mobile-nav.open {
+  max-height: calc(100vh - 60px);
+}
+```
 
 ---
 

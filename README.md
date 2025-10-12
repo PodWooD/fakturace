@@ -46,6 +46,7 @@ cd ..
 - 🔄 **Export do Pohody** - XML formát kompatibilní s Pohoda 2.0
 - 💼 **Paušální služby** - Správa pravidelných měsíčních služeb
 - 🖥️ **Evidence hardware** - Fakturace prodaného hardware
+- 📱 **Responzivní design** - Plně funkční na mobilech, tabletech i desktop
 
 ## 📋 Požadavky
 
@@ -65,8 +66,35 @@ cd ..
 **Frontend:**
 - Next.js 14
 - TypeScript
-- Tailwind CSS
+- Tailwind CSS (včetně responzivního designu)
 - TanStack Query & Table
+
+## 📱 Responzivní design
+
+Aplikace je **plně optimalizována pro všechna zařízení**:
+
+**📱 Mobilní zařízení (< 768px):**
+- Hamburger menu pro intuitivní navigaci
+- Touch-optimalizované tlačítka (min 44px)
+- Responzivní tabulky s horizontal scrollem
+- 1-column layout pro lepší čitelnost
+- Optimalizované fonty a spacing
+
+**📲 Tablety (768px - 1024px):**
+- 2-column grid layout
+- Plná navigace nebo hamburger menu dle velikosti
+- Touch-friendly rozhraní
+
+**🖥️ Desktop (> 1024px):**
+- Plná horizontální navigace
+- Multi-column layouts
+- Optimalizované pro myš a klávesnici
+
+**Testování:**
+```bash
+# Chrome DevTools Device Mode
+F12 → Ctrl+Shift+M → Vyber mobilní zařízení
+```
 
 ## 📁 Struktura projektu
 
