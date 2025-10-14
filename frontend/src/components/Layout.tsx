@@ -24,8 +24,11 @@ export default function Layout({ children, user }: LayoutProps) {
     { name: '📊 Dashboard', href: '/dashboard' },
     { name: '🏢 Organizace', href: '/organizations' },
     { name: '⏱️ Výkazy práce', href: '/work-records' },
+    { name: '💶 Fakturace', href: '/fakturace' },
     { name: '📄 Faktury', href: '/invoices' },
     { name: '📥 Import dat', href: '/import' },
+    { name: '🧾 Faktury přijaté', href: '/received-invoices' },
+    { name: '🛠️ Hardware', href: '/hardware' },
     { name: '📤 Export', href: '/export' },
     { name: '📈 Reporty', href: '/reports' },
   ];
@@ -58,10 +61,12 @@ export default function Layout({ children, user }: LayoutProps) {
               {navigation.map((item) => {
                 const isActive = router.pathname === item.href;
                 return (
-                  <Link key={item.name} href={item.href}>
-                    <a className={`nav-link ${isActive ? 'active' : ''}`}>
-                      {item.name}
-                    </a>
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    className={`nav-link ${isActive ? 'active' : ''}`}
+                  >
+                    {item.name}
                   </Link>
                 );
               })}
@@ -81,13 +86,13 @@ export default function Layout({ children, user }: LayoutProps) {
             {navigation.map((item) => {
               const isActive = router.pathname === item.href;
               return (
-                <Link key={item.name} href={item.href}>
-                  <a
-                    className={`mobile-nav-link ${isActive ? 'active' : ''}`}
-                    onClick={() => setMobileMenuOpen(false)}
-                  >
-                    {item.name}
-                  </a>
+                <Link
+                  key={item.name}
+                  href={item.href}
+                  className={`mobile-nav-link ${isActive ? 'active' : ''}`}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  {item.name}
                 </Link>
               );
             })}

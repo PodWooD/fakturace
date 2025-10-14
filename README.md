@@ -46,7 +46,10 @@ cd ..
 - 🔄 **Export do Pohody** - XML formát kompatibilní s Pohoda 2.0
 - 💼 **Paušální služby** - Správa pravidelných měsíčních služeb
 - 🖥️ **Evidence hardware** - Fakturace prodaného hardware
+- 🧾 **Import přijatých faktur (OCR)** - Mistral OCR rozpozná položky, které se dají schválit a přiřadit
+- 📥 **Hromadný import** - Excel výkazy i PDF faktury lze nahrát po více souborech s průběhem nahrávání
 - 📱 **Responzivní design** - Plně funkční na mobilech, tabletech i desktop
+- 💶 **Návrhy fakturace** - Nová záložka pro editaci všech položek před generováním faktury
 
 ## 📋 Požadavky
 
@@ -128,6 +131,11 @@ JWT_SECRET=your-super-secret-jwt-key
 # CORS
 CORS_ORIGIN=http://localhost:3030
 
+# OCR (Mistral)
+MISTRAL_OCR_API_KEY="your-mistral-api-key"
+MISTRAL_OCR_URL="https://api.mistral.ai/v1/ocr"
+MISTRAL_OCR_LANGUAGE="cs"
+
 # Firemní údaje
 COMPANY_NAME="Vaše firma s.r.o."
 COMPANY_ICO="12345678"
@@ -138,6 +146,12 @@ COMPANY_EMAIL="info@vase-firma.cz"
 COMPANY_BANK_ACCOUNT="1234567890/0100"
 ```
 
+Pro frontend vytvořte `.env.local` podle šablony `.env.local.example`:
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:3002
+```
+
 ## 📚 Dokumentace
 
 - [Kompletní dokumentace](./docs/dokumentace.md)
@@ -145,6 +159,23 @@ COMPANY_BANK_ACCOUNT="1234567890/0100"
 - [Instalační příručka](./docs/installation-guide.md)
 - [Uživatelská příručka](./docs/user-guide.md)
 - [Vizuální dokumentace](./docs/visual-documentation.md)
+
+## 📥 Import dat v aplikaci
+
+- **Excel výkazy** – na stránce Import dat můžete nahrát více souborů `.xlsx/.xls`. Pro každý soubor vidíte průběh nahrávání, stav a zprávu z backendu. Měsíc/rok se nastavují globálně před spuštěním importu.
+- **Přijaté faktury (PDF)** – do téže stránky jde přidat libovolný počet faktur. Backend je odešle do OCR Mistral (viz `.env`), položky se zobrazí v záložkách „Faktury přijaté“ (ruční kontrola) a „Hardware“ (přiřazení organizaci). Z fakturace se potom dají natáhnout přímo do draftu.
+- Importy běží postupně a zobrazený progress bar odpovídá skutečnému uploadu souboru.
+
+## ✅ CI/CD
+
+Repo obsahuje GitHub Actions workflow (`.github/workflows/test.yml`), které na každém pushi/pull requestu:
+- nainstaluje závislosti
+- spustí backend testy přes `npm test`
+- spustí Playwright E2E testy
+
+## 🔐 Bezpečnostní poznámka
+
+Knihovna `xlsx` (SheetJS) má aktuálně hlášenou zranitelnost (prototype pollution, ReDoS) bez dostupné opravy. V případě nasazení do produkčního prostředí doporučujeme sledovat vydání opravované verze nebo zvážit nasazení mitigací (sandboxování importu, omezení přístupu, validace souborů).
 
 ## 🚀 Deployment
 

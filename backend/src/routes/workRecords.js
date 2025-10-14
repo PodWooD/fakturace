@@ -96,7 +96,7 @@ router.post('/bulk', authMiddleware, async (req, res) => {
     for (let i = 0; i < records.length; i++) {
       try {
         const record = records[i];
-        
+
         // Převod hodin na minuty
         let totalMinutes = 0;
         if (record.minutes) {
@@ -108,10 +108,21 @@ router.post('/bulk', authMiddleware, async (req, res) => {
           } else {
             totalMinutes = parseFloat(record.hours) * 60;
           }
+        } else if (record.timeFrom && record.timeTo) {
+          // Pokud je zadán čas od-do, vypočti minuty
+          const [fromHours, fromMinutes] = record.timeFrom.split(':').map(n => parseInt(n));
+          const [toHours, toMinutes] = record.timeTo.split(':').map(n => parseInt(n));
+          const fromTotalMinutes = fromHours * 60 + fromMinutes;
+          const toTotalMinutes = toHours * 60 + toMinutes;
+          totalMinutes = toTotalMinutes - fromTotalMinutes;
+
+          if (totalMinutes < 0) {
+            totalMinutes += 24 * 60; // Pokud přes půlnoc
+          }
         }
 
         const recordDate = new Date(record.date);
-        
+
         const created = await prisma.workRecord.create({
           data: {
             organizationId: parseInt(record.organizationId),
@@ -120,6 +131,9 @@ router.post('/bulk', authMiddleware, async (req, res) => {
             description: record.description,
             minutes: totalMinutes,
             kilometers: parseInt(record.kilometers) || 0,
+            timeFrom: record.timeFrom || null,
+            timeTo: record.timeTo || null,
+            branch: record.branch || null,
             month: recordDate.getMonth() + 1,
             year: recordDate.getFullYear(),
             createdBy: req.user.id
@@ -296,13 +310,16 @@ router.post('/', authMiddleware, async (req, res) => {
       description,
       hours,
       minutes,
-      kilometers
+      kilometers,
+      timeFrom,
+      timeTo,
+      branch
     } = req.body;
 
     // Validace povinných polí
     if (!organizationId || !date || !worker || !description) {
-      return res.status(400).json({ 
-        error: 'Organizace, datum, pracovník a popis jsou povinné' 
+      return res.status(400).json({
+        error: 'Organizace, datum, pracovník a popis jsou povinné'
       });
     }
 
@@ -317,6 +334,17 @@ router.post('/', authMiddleware, async (req, res) => {
         totalMinutes = parseInt(h) * 60 + parseInt(m);
       } else {
         totalMinutes = parseFloat(hours) * 60;
+      }
+    } else if (timeFrom && timeTo) {
+      // Pokud je zadán čas od-do, vypočti minuty
+      const [fromHours, fromMinutes] = timeFrom.split(':').map(n => parseInt(n));
+      const [toHours, toMinutes] = timeTo.split(':').map(n => parseInt(n));
+      const fromTotalMinutes = fromHours * 60 + fromMinutes;
+      const toTotalMinutes = toHours * 60 + toMinutes;
+      totalMinutes = toTotalMinutes - fromTotalMinutes;
+
+      if (totalMinutes < 0) {
+        totalMinutes += 24 * 60; // Pokud přes půlnoc
       }
     }
 
@@ -333,6 +361,9 @@ router.post('/', authMiddleware, async (req, res) => {
         description,
         minutes: totalMinutes,
         kilometers: parseInt(kilometers) || 0,
+        timeFrom: timeFrom || null,
+        timeTo: timeTo || null,
+        branch: branch || null,
         month,
         year,
         projectCode: req.body.projectCode || null,
@@ -363,7 +394,10 @@ router.put('/:id', authMiddleware, async (req, res) => {
       description,
       hours,
       minutes,
-      kilometers
+      kilometers,
+      timeFrom,
+      timeTo,
+      branch
     } = req.body;
 
     // Kontrola existence
@@ -386,6 +420,17 @@ router.put('/:id', authMiddleware, async (req, res) => {
       } else {
         totalMinutes = parseFloat(hours) * 60;
       }
+    } else if (timeFrom !== undefined && timeTo !== undefined && timeFrom && timeTo) {
+      // Pokud je zadán čas od-do, vypočti minuty
+      const [fromHours, fromMinutes] = timeFrom.split(':').map(n => parseInt(n));
+      const [toHours, toMinutes] = timeTo.split(':').map(n => parseInt(n));
+      const fromTotalMinutes = fromHours * 60 + fromMinutes;
+      const toTotalMinutes = toHours * 60 + toMinutes;
+      totalMinutes = toTotalMinutes - fromTotalMinutes;
+
+      if (totalMinutes < 0) {
+        totalMinutes += 24 * 60; // Pokud přes půlnoc
+      }
     }
 
     // Aktualizace měsíce a roku pokud se změnilo datum
@@ -407,12 +452,21 @@ router.put('/:id', authMiddleware, async (req, res) => {
       updateData.year = recordDate.getFullYear();
     }
 
-    // Přidej billingOrgId a projectCode pokud jsou v požadavku
+    // Přidej billingOrgId, projectCode, timeFrom, timeTo a branch pokud jsou v požadavku
     if (req.body.billingOrgId !== undefined) {
       updateData.billingOrgId = req.body.billingOrgId ? parseInt(req.body.billingOrgId) : null;
     }
     if (req.body.projectCode !== undefined) {
       updateData.projectCode = req.body.projectCode;
+    }
+    if (timeFrom !== undefined) {
+      updateData.timeFrom = timeFrom || null;
+    }
+    if (timeTo !== undefined) {
+      updateData.timeTo = timeTo || null;
+    }
+    if (branch !== undefined) {
+      updateData.branch = branch || null;
     }
 
     const record = await prisma.workRecord.update({

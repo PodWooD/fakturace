@@ -4,14 +4,17 @@ const { PrismaClient } = require('@prisma/client');
 const authMiddleware = require('../middleware/auth');
 const PDFGenerator = require('../services/pdfGenerator');
 const PohodaExport = require('../services/pohodaExport');
+const {
+  DEFAULT_VAT_RATE,
+  calculateInvoiceTotals,
+  roundCurrency
+} = require('../services/invoiceTotals');
 
 const prisma = new PrismaClient();
 const pdfGenerator = new PDFGenerator();
 const pohodaExport = new PohodaExport();
 
-const VAT_RATE = 0.21;
-
-const roundCurrency = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+const VAT_RATE = DEFAULT_VAT_RATE;
 
 const buildWorkRecordWhere = (organizationId, month, year) => ({
   OR: [
@@ -63,38 +66,14 @@ const collectInvoiceData = async (organizationId, month, year, { includeWorkplac
     })
   ]);
 
-  const hourlyRate = Number(organization.hourlyRate || 0);
-  const kmRate = Number(organization.kmRate || 0);
-
-  let workAmount = 0;
-  let kmAmount = 0;
-
-  workRecords.forEach((record) => {
-    const hours = record.minutes / 60;
-    workAmount += hours * hourlyRate;
-    kmAmount += record.kilometers * kmRate;
-  });
-
-  const servicesAmount = services.reduce((sum, service) => sum + Number(service.monthlyPrice || 0), 0);
-  const hardwareAmount = hardware.reduce((sum, item) => sum + Number(item.totalPrice || item.unitPrice * item.quantity || 0), 0);
-
-  const totalAmount = roundCurrency(workAmount + kmAmount + servicesAmount + hardwareAmount);
-  const totalVat = roundCurrency(totalAmount * VAT_RATE);
+  const totals = calculateInvoiceTotals(organization, workRecords, services, hardware, VAT_RATE);
 
   return {
     organization,
     workRecords,
     services,
     hardware,
-    totals: {
-      workAmount: roundCurrency(workAmount),
-      kmAmount: roundCurrency(kmAmount),
-      servicesAmount: roundCurrency(servicesAmount),
-      hardwareAmount: roundCurrency(hardwareAmount),
-      totalAmount,
-      totalVat,
-      totalWithVat: roundCurrency(totalAmount + totalVat)
-    }
+    totals
   };
 };
 

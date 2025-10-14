@@ -6,6 +6,8 @@
 **Autentizace:** Bearer Token (JWT)  
 **Content-Type:** `application/json` (pokud není uvedeno jinak)
 
+**Další dokumentace:** [Integrace přijatých faktur](./integration-plan.md)
+
 ## Autentizace
 
 Všechny endpointy kromě `/auth/login` vyžadují autentizaci pomocí Bearer tokenu v hlavičce:
@@ -44,19 +46,21 @@ POST /auth/login
 }
 ```
 
-#### Registrace nového uživatele
+#### Ověření platnosti tokenu
 ```http
-POST /auth/register
-Authorization: Bearer <admin-token>
+GET /auth/verify
+Authorization: Bearer <token>
 ```
 
-**Request Body:**
+**Response:** `200 OK`
 ```json
 {
-  "email": "user@example.com",
-  "password": "password123",
-  "name": "Jan Novák",
-  "role": "USER"
+  "user": {
+    "id": 1,
+    "email": "admin@fakturace.cz",
+    "name": "Administrator",
+    "role": "ADMIN"
+  }
 }
 ```
 
@@ -76,7 +80,7 @@ Authorization: Bearer <token>
 **Response:** `200 OK`
 ```json
 {
-  "organizations": [
+  "data": [
     {
       "id": 1,
       "name": "Lázně Toušeň",
@@ -91,9 +95,7 @@ Authorization: Bearer <token>
       "dic": "CZ12345678"
     }
   ],
-  "total": 15,
-  "page": 1,
-  "totalPages": 1
+  "total": 15
 }
 ```
 
@@ -186,7 +188,275 @@ Content-Type: multipart/form-data
     "totalRows": 85,
     "skippedRows": 3,
     "newOrganizations": 2
+  },
+  "newlyCreatedOrganizations": [
+    {
+      "id": 42,
+      "name": "Nová organizace",
+      "code": "NEW"
+    }
+  ]
+}
+```
+
+### 🧾 Přijaté faktury (OCR)
+
+#### Nahrání faktury (OCR nebo JSON)
+```http
+POST /received-invoices/upload
+Authorization: Bearer <token>
+Content-Type: multipart/form-data | application/json
+```
+
+**Varianty vstupu:**
+- `multipart/form-data` s polem `file` (PDF/JPEG). Backend převádí dokument na Base64 a volá API Mistral OCR (`MISTRAL_OCR_*`).
+- `application/json` – manuálně poskytnutý výstup OCR (`invoiceNumber`, `supplierName`, `items`…).
+
+**Response:** `201 Created`
+```json
+{
+  "invoice": {
+    "id": 12,
+    "supplierName": "Dodavatel s.r.o.",
+    "invoiceNumber": "FA-2025-001",
+    "status": "PENDING"
+  },
+  "items": [
+    {
+      "id": 34,
+      "itemName": "Switch 24p",
+      "quantity": 1,
+      "unitPrice": "4500",
+      "totalPrice": "4500",
+      "status": "PENDING"
+    }
+  ]
+}
+```
+
+#### Seznam přijatých faktur
+```http
+GET /received-invoices
+Authorization: Bearer <token>
+```
+
+**Query parametry (volitelné):** `status` (`PENDING`, `READY`, `ARCHIVED`).
+
+#### Detail faktury včetně položek
+```http
+GET /received-invoices/:id
+Authorization: Bearer <token>
+```
+
+#### Uložení upravených položek
+```http
+PUT /received-invoices/:id/items
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "items": [
+    { "id": 34, "itemName": "Switch", "quantity": 2, "unitPrice": 4300, "totalPrice": 8600 }
+  ]
+}
+```
+
+#### Schválení / archivace faktury
+```http
+POST /received-invoices/:id/approve
+POST /received-invoices/:id/reject
+Authorization: Bearer <token>
+```
+
+#### Seznam položek napříč fakturami
+```http
+GET /received-invoices/items/list
+Authorization: Bearer <token>
+```
+
+**Query parametry (volitelné):** `status` (`PENDING`, `APPROVED`, `ASSIGNED`, `INVOICED`), `organizationId`, `invoiceId`.
+
+#### Přiřazení položky k organizaci (vznik záznamu hardware)
+```http
+POST /received-invoices/items/:id/assign
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "organizationId": 5,
+  "month": 7,
+  "year": 2025
+}
+```
+
+### 🛠️ Hardware
+
+#### Seznam hardware položek
+```http
+GET /hardware
+Authorization: Bearer <token>
+```
+
+**Query parametry:** `organizationId`, `month`, `year`, `status` (`NEW`, `MANUAL`, `ASSIGNED`, `INVOICED`). Odpověď obsahuje i vazbu na fakturu (dodavatel, číslo faktury), pokud položka pochází z OCR.
+
+#### Označení položky jako vyfakturované
+```http
+POST /hardware/:id/mark-invoiced
+Authorization: Bearer <token>
+```
+
+### 💶 Fakturační podklady
+
+#### Přehled pro organizaci a období
+```http
+GET /billing/summary
+Authorization: Bearer <token>
+```
+
+**Query parametry:**
+- `organizationId` *(povinné)*
+- `month` *(volitelné, výchozí aktuální měsíc)*
+- `year` *(volitelné, výchozí aktuální rok)*
+
+**Response:** `200 OK`
+```json
+{
+  "base": {
+    "organization": {
+      "id": 5,
+      "name": "Test Fakturace s.r.o.",
+      "code": "TF",
+      "hourlyRate": 650,
+      "kmRate": 12
+    },
+    "period": {
+      "month": 7,
+      "year": 2025
+    },
+    "services": [
+      {
+        "id": 12,
+        "serviceName": "Outsourcing",
+        "description": "Měsíční paušál",
+        "monthlyPrice": 5000
+      }
+    ],
+    "work": {
+      "entries": [
+        {
+          "id": 44,
+          "date": "2025-07-15T00:00:00.000Z",
+          "worker": "Jan Technik",
+          "description": "Servisní zásah",
+          "minutes": 180,
+          "hours": 3,
+          "kilometers": 20,
+          "hourlyAmount": 1950,
+          "kmAmount": 240
+        }
+      ],
+      "summary": {
+        "totalMinutes": 180,
+        "totalHours": 3,
+        "totalKm": 20,
+        "hourlyAmount": 1950,
+        "kmAmount": 240
+      }
+    },
+    "hardware": [
+      {
+        "id": 9,
+        "itemName": "Switch 24 portů",
+        "description": "Instalace pro centrálu",
+        "quantity": 1,
+        "unitPrice": 4500,
+        "totalPrice": 4500
+      }
+    ],
+    "software": [],
+    "totals": {
+      "workAmount": 1950,
+      "kmAmount": 240,
+      "servicesAmount": 5000,
+      "hardwareAmount": 4500,
+      "totalAmount": 11690,
+      "totalVat": 2454.9,
+      "totalWithVat": 14144.9
+    }
+  },
+  "draft": {
+    "data": { /* uložený návrh, pokud existuje */ },
+    "updatedAt": "2025-07-25T09:15:00.000Z",
+    "updatedBy": 1
   }
+}
+```
+
+#### Uložení návrhu
+```http
+PUT /billing/draft
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+**Request Body:**
+```json
+{
+  "organizationId": 5,
+  "month": 7,
+  "year": 2025,
+  "data": {
+    "rates": {
+      "hourlyRate": "650",
+      "kmRate": "12",
+      "extraHourlyRate": "750",
+      "extraKmRate": "15"
+    },
+    "services": [
+      {
+        "id": null,
+        "serviceName": "Konzultace",
+        "description": "Ad-hoc práce",
+        "monthlyPrice": 1500
+      }
+    ],
+    "work": {
+      "entries": [
+        {
+          "id": null,
+          "date": "2025-07-20",
+          "worker": "Eva Testerová",
+          "description": "Diagnostika",
+          "minutes": 120,
+          "hours": 2,
+          "kilometers": 10,
+          "hourlyAmount": 1400,
+          "kmAmount": 120
+        }
+      ],
+      "notes": "Přidat do faktury jako mimořádný zásah."
+    },
+    "hardware": [],
+    "software": [],
+    "notes": "Ověřit ceny před vystavením."
+  }
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "data": {
+    "rates": {
+      "hourlyRate": "650",
+      "kmRate": "12",
+      "extraHourlyRate": "750",
+      "extraKmRate": "15"
+    },
+    "notes": "Ověřit ceny před vystavením."
+  },
+  "updatedAt": "2025-07-25T09:20:12.000Z",
+  "updatedBy": 1
 }
 ```
 

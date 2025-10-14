@@ -28,6 +28,8 @@ model Organization {
   billedRecords WorkRecord[]  @relation("WorkRecordBillingOrg")
   hardware      Hardware[]
   invoices      Invoice[]
+  billingDrafts BillingDraft[]
+  receivedInvoiceItems ReceivedInvoiceItem[]
 }
 
 model Service {
@@ -48,34 +50,41 @@ model WorkRecord {
   worker         String
   description    String
   minutes        Int          @default(0)
+  timeFrom       String?      // Čas začátku práce (HH:MM)
+  timeTo         String?      // Čas konce práce (HH:MM)
+  branch         String?      // Pobočka organizace
   kilometers     Int          @default(0)
   month          Int?
   year           Int?
-  price          Decimal?     
+  price          Decimal?
   projectCode    String?      // Kód zakázky (např. "O - Oresi", "DOH - Oresi - Dohnal")
   billingOrgId   Int?         // ID organizace pro fakturaci (pokud se liší od organizationId)
   createdAt      DateTime     @default(now())
   createdBy      Int?
-  
+
   organization   Organization @relation(fields: [organizationId], references: [id], name: "WorkRecordOrganization")
   billingOrg     Organization? @relation(fields: [billingOrgId], references: [id], name: "WorkRecordBillingOrg")
-  
+
   @@index([month, year])
   @@index([projectCode])
 }
 
 model Hardware {
-  id             Int          @id @default(autoincrement())
-  organizationId Int
-  itemName       String
-  description    String?
-  quantity       Int
-  unitPrice      Decimal      
-  totalPrice     Decimal      
-  month          Int
-  year           Int
+  id                   Int          @id @default(autoincrement())
+  organizationId       Int
+  itemName             String
+  description          String?
+  quantity             Int
+  unitPrice            Decimal      
+  totalPrice           Decimal      
+  month                Int
+  year                 Int
+  status               String       @default("NEW")
+  sourceInvoiceItemId  Int?         @unique
+  assignedAt           DateTime?
   
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  organization         Organization @relation(fields: [organizationId], references: [id])
+  invoiceItem          ReceivedInvoiceItem? @relation("HardwareInvoiceItem", fields: [sourceInvoiceItemId], references: [id])
 }
 
 model Invoice {
@@ -95,6 +104,61 @@ model Invoice {
   organization   Organization @relation(fields: [organizationId], references: [id])
   
   @@index([month, year])
+}
+
+model BillingDraft {
+  id             Int           @id @default(autoincrement())
+  organizationId Int
+  month          Int
+  year           Int
+  data           String
+  updatedBy      Int?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, month, year])
+}
+
+model ReceivedInvoice {
+  id              Int       @id @default(autoincrement())
+  supplierName    String
+  supplierIco     String?
+  invoiceNumber   String
+  issueDate       DateTime?
+  totalWithoutVat Decimal?
+  totalWithVat    Decimal?
+  currency        String    @default("CZK")
+  status          String    @default("PENDING")
+  sourceFilePath  String?
+  ocrPayload      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  createdBy       Int?
+
+  items ReceivedInvoiceItem[]
+}
+
+model ReceivedInvoiceItem {
+  id                     Int       @id @default(autoincrement())
+  invoiceId              Int
+  itemName               String
+  description            String?
+  quantity               Decimal?
+  unitPrice              Decimal?
+  totalPrice             Decimal?
+  vatRate                Decimal?
+  status                 String    @default("PENDING")
+  assignedOrganizationId Int?
+  assignedMonth          Int?
+  assignedYear           Int?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  invoice                ReceivedInvoice @relation(fields: [invoiceId], references: [id])
+  assignedOrganization   Organization?   @relation(fields: [assignedOrganizationId], references: [id])
+  hardware               Hardware?       @relation("HardwareInvoiceItem")
 }
 
 model User {

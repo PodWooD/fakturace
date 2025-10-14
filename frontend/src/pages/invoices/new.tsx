@@ -175,8 +175,8 @@ export default function NewInvoice() {
       <div className="container">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
           <h1>Nová faktura</h1>
-          <Link href="/invoices">
-            <a className="btn btn-outline">← Zpět na seznam</a>
+          <Link href="/invoices" className="btn btn-outline">
+            ← Zpět na seznam
           </Link>
         </div>
 

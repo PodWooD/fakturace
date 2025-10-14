@@ -8,12 +8,13 @@ const prisma = new PrismaClient();
 // GET hardware položky s filtrováním
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    const { organizationId, month, year, page = 1, limit = 50 } = req.query;
+    const { organizationId, month, year, status, page = 1, limit = 50 } = req.query;
 
     const where = {};
     if (organizationId) where.organizationId = parseInt(organizationId);
     if (month) where.month = parseInt(month);
     if (year) where.year = parseInt(year);
+    if (status) where.status = status;
 
     const total = await prisma.hardware.count({ where });
 
@@ -25,6 +26,19 @@ router.get('/', authMiddleware, async (req, res) => {
             id: true,
             name: true,
             code: true
+          }
+        },
+        invoiceItem: {
+          select: {
+            id: true,
+            invoice: {
+              select: {
+                id: true,
+                supplierName: true,
+                invoiceNumber: true,
+                issueDate: true
+              }
+            }
           }
         }
       },
@@ -114,7 +128,8 @@ router.post('/', authMiddleware, async (req, res) => {
         unitPrice: parseFloat(unitPrice),
         totalPrice,
         month: parseInt(month),
-        year: parseInt(year)
+        year: parseInt(year),
+        status: 'MANUAL'
       },
       include: {
         organization: true
@@ -208,6 +223,39 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error deleting hardware:', error);
     res.status(500).json({ error: 'Chyba při mazání hardware' });
+  }
+});
+
+router.post('/:id/mark-invoiced', authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const hardware = await prisma.hardware.findUnique({
+      where: { id: parseInt(id) }
+    });
+
+    if (!hardware) {
+      return res.status(404).json({ error: 'Hardware nenalezen' });
+    }
+
+    const updated = await prisma.hardware.update({
+      where: { id: hardware.id },
+      data: {
+        status: 'INVOICED',
+        assignedAt: hardware.assignedAt || new Date()
+      }
+    });
+
+    if (updated.sourceInvoiceItemId) {
+      await prisma.receivedInvoiceItem.update({
+        where: { id: updated.sourceInvoiceItemId },
+        data: { status: 'INVOICED' }
+      });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    console.error('Error marking hardware invoiced:', error);
+    res.status(500).json({ error: 'Chyba při označení hardware jako vyfakturovaného' });
   }
 });
 

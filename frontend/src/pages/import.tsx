@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '@/components/Layout';
+import { API_URL } from '../config/api';
 
 interface User {
   id: number;
@@ -9,18 +10,92 @@ interface User {
   role: string;
 }
 
-export default function ImportPage() {
+type QueueStatus = 'pending' | 'uploading' | 'success' | 'error';
+
+interface QueueItem {
+  id: string;
+  file: File;
+  status: QueueStatus;
+  progress: number;
+  message: string;
+}
+
+const formatFileSize = (size: number) => {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const uploadWithProgress = (
+  url: string,
+  token: string,
+  formData: FormData,
+  onProgress: (progress: number) => void
+) =>
+  new Promise<{ status: number; body: any }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.responseType = 'text';
+
+    xhr.upload.onprogress = (evt) => {
+      if (evt.lengthComputable) {
+        const percent = Math.round((evt.loaded / evt.total) * 100);
+        onProgress(percent);
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Chyba při odesílání souboru'));
+
+    xhr.onload = () => {
+      const status = xhr.status;
+      let body: any = xhr.responseText;
+      try {
+        body = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+      } catch (err) {
+        // ignorujeme, necháme text
+      }
+      if (status >= 200 && status < 300) {
+        resolve({ status, body });
+      } else {
+        const message = body?.error || xhr.statusText || 'Chyba serveru';
+        reject(new Error(message));
+      }
+    };
+
+    xhr.send(formData);
+  });
+
+const ImportPage: React.FC = () => {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState<{type: 'success' | 'error' | null, message: string}>({type: null, message: ''});
+  const [loading, setLoading] = useState<boolean>(true);
+
+  const [month, setMonth] = useState<number>(new Date().getMonth() + 1);
+  const [year, setYear] = useState<number>(new Date().getFullYear());
+
+  const [excelQueue, setExcelQueue] = useState<QueueItem[]>([]);
+  const [invoiceQueue, setInvoiceQueue] = useState<QueueItem[]>([]);
+
+  const [excelUploading, setExcelUploading] = useState<boolean>(false);
+  const [invoiceUploading, setInvoiceUploading] = useState<boolean>(false);
+
+  const [excelError, setExcelError] = useState<string>('');
+  const [invoiceError, setInvoiceError] = useState<string>('');
+
+  const monthOptions = useMemo(
+    () =>
+      Array.from({ length: 12 }).map((_, idx) => ({
+        value: idx + 1,
+        label: new Date(2024, idx).toLocaleDateString('cs-CZ', { month: 'long' })
+      })),
+    []
+  );
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     const userData = localStorage.getItem('user');
-    
+
     if (!token) {
       router.push('/login');
       return;
@@ -32,71 +107,229 @@ export default function ImportPage() {
     setLoading(false);
   }, [router]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
-      
-      // Kontrola typu souboru
-      const validTypes = ['application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-      if (!validTypes.includes(selectedFile.type)) {
-        setUploadStatus({
-          type: 'error',
-          message: 'Prosím vyberte platný Excel soubor (.xls nebo .xlsx)'
-        });
-        return;
-      }
-      
-      setFile(selectedFile);
-      setUploadStatus({type: null, message: ''});
-    }
+  const appendToQueue = (
+    files: FileList | null,
+    setter: React.Dispatch<React.SetStateAction<QueueItem[]>>
+  ) => {
+    if (!files || files.length === 0) return;
+    setter((prev) => [
+      ...prev,
+      ...Array.from(files).map((file) => ({
+        id: `${file.name}-${file.size}-${Date.now()}-${Math.random()}`,
+        file,
+        status: 'pending' as QueueStatus,
+        progress: 0,
+        message: ''
+      }))
+    ]);
   };
 
-  const handleUpload = async () => {
-    if (!file) return;
+  const removeFromQueue = (
+    id: string,
+    setter: React.Dispatch<React.SetStateAction<QueueItem[]>>
+  ) => {
+    setter((prev) => prev.filter((item) => item.id !== id));
+  };
 
-    setUploading(true);
-    setUploadStatus({type: null, message: ''});
+  const resetQueue = (
+    setter: React.Dispatch<React.SetStateAction<QueueItem[]>>
+  ) => setter([]);
 
-    const formData = new FormData();
-    formData.append('file', file);
+  const updateQueueItem = (
+    setter: React.Dispatch<React.SetStateAction<QueueItem[]>>,
+    id: string,
+    data: Partial<QueueItem>
+  ) => {
+    setter((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...data } : item))
+    );
+  };
 
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('/api/import/excel', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
+  const handleExcelUpload = async () => {
+    if (excelQueue.length === 0) {
+      setExcelError('Přidejte alespoň jeden Excel soubor.');
+      return;
+    }
+    if (!month || !year) {
+      setExcelError('Vyberte měsíc a rok.');
+      return;
+    }
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setExcelError('Chybí token. Přihlaste se prosím znovu.');
+      return;
+    }
+
+    setExcelUploading(true);
+    setExcelError('');
+
+    for (const item of excelQueue) {
+      if (item.status === 'success') continue;
+
+      updateQueueItem(setExcelQueue, item.id, {
+        status: 'uploading',
+        progress: 0,
+        message: ''
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setUploadStatus({
-          type: 'success',
-          message: `Import úspěšný! Zpracováno ${data.recordsCount} záznamů.`
+      const formData = new FormData();
+      formData.append('file', item.file);
+      formData.append('month', String(month));
+      formData.append('year', String(year));
+
+      try {
+        const response = await uploadWithProgress(
+          `${API_URL}/api/import`,
+          token,
+          formData,
+          (progress) => updateQueueItem(setExcelQueue, item.id, { progress })
+        );
+
+        const body = response.body || {};
+        const message = body.recordsCount
+          ? `Načteno ${body.recordsCount} záznamů.`
+          : 'Import dokončen.';
+
+        updateQueueItem(setExcelQueue, item.id, {
+          status: 'success',
+          progress: 100,
+          message
         });
-        setFile(null);
-        
-        // Reset file inputu
-        const fileInput = document.getElementById('file-input') as HTMLInputElement;
-        if (fileInput) fileInput.value = '';
-      } else {
-        const error = await response.json();
-        setUploadStatus({
-          type: 'error',
-          message: error.message || 'Chyba při importu souboru'
+      } catch (err: any) {
+        updateQueueItem(setExcelQueue, item.id, {
+          status: 'error',
+          message: err.message || 'Import selhal'
         });
       }
-    } catch (error) {
-      setUploadStatus({
-        type: 'error',
-        message: 'Chyba připojení k serveru'
-      });
-    } finally {
-      setUploading(false);
     }
+
+    setExcelUploading(false);
   };
+
+  const handleInvoiceUpload = async () => {
+    if (invoiceQueue.length === 0) {
+      setInvoiceError('Přidejte alespoň jeden soubor faktury (PDF).');
+      return;
+    }
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setInvoiceError('Chybí token. Přihlaste se prosím znovu.');
+      return;
+    }
+
+    setInvoiceUploading(true);
+    setInvoiceError('');
+
+    for (const item of invoiceQueue) {
+      if (item.status === 'success') continue;
+
+      updateQueueItem(setInvoiceQueue, item.id, {
+        status: 'uploading',
+        progress: 0,
+        message: ''
+      });
+
+      const formData = new FormData();
+      formData.append('file', item.file);
+
+      try {
+        const response = await uploadWithProgress(
+          `${API_URL}/api/received-invoices/upload`,
+          token,
+          formData,
+          (progress) => updateQueueItem(setInvoiceQueue, item.id, { progress })
+        );
+
+        const body = response.body || {};
+        const message = body.items
+          ? `Načteno ${body.items.length} položek.`
+          : 'Faktura nahrána.';
+
+        updateQueueItem(setInvoiceQueue, item.id, {
+          status: 'success',
+          progress: 100,
+          message
+        });
+      } catch (err: any) {
+        updateQueueItem(setInvoiceQueue, item.id, {
+          status: 'error',
+          message: err.message || 'Import selhal'
+        });
+      }
+    }
+
+    setInvoiceUploading(false);
+  };
+
+  const renderQueueTable = (
+    title: string,
+    queue: QueueItem[],
+    onRemove: (id: string) => void
+  ) => (
+    <table className="min-w-full text-sm">
+      <thead className="bg-gray-100">
+        <tr>
+          <th className="px-3 py-2 text-left">Soubor</th>
+          <th className="px-3 py-2 text-left">Velikost</th>
+          <th className="px-3 py-2 text-left">Stav</th>
+          <th className="px-3 py-2 text-left">Zpráva</th>
+          <th className="px-3 py-2 text-center">Akce</th>
+        </tr>
+      </thead>
+      <tbody>
+        {queue.map((item) => (
+          <tr key={item.id} className="border-b border-gray-200">
+            <td className="px-3 py-2">{item.file.name}</td>
+            <td className="px-3 py-2">{formatFileSize(item.file.size)}</td>
+            <td className="px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span>
+                  {item.status === 'pending' && 'Čeká'}
+                  {item.status === 'uploading' && 'Nahrávám...'}
+                  {item.status === 'success' && 'Hotovo'}
+                  {item.status === 'error' && 'Chyba'}
+                </span>
+                {(item.status === 'uploading' || item.progress > 0) && (
+                  <div className="flex-1">
+                    <div className="h-2 bg-gray-200 rounded">
+                      <div
+                        className={`h-full rounded ${
+                          item.status === 'error' ? 'bg-red-500' : 'bg-green-500'
+                        }`}
+                        style={{ width: `${item.progress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </td>
+            <td className="px-3 py-2 text-sm text-gray-600">
+              {item.message}
+            </td>
+            <td className="px-3 py-2 text-center">
+              {item.status === 'pending' && (
+                <button
+                  className="text-sm text-red-600 hover:underline"
+                  onClick={() => onRemove(item.id)}
+                >
+                  Odebrat
+                </button>
+              )}
+            </td>
+          </tr>
+        ))}
+        {queue.length === 0 && (
+          <tr>
+            <td colSpan={5} className="px-4 py-6 text-center text-gray-500">
+              Zatím žádné soubory.
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  );
 
   if (loading || !user) {
     return (
@@ -110,141 +343,246 @@ export default function ImportPage() {
 
   return (
     <Layout user={user}>
-      <div className="container">
-        <h1>Import dat z Excelu</h1>
-        
-        <div className="table-container" style={{ marginBottom: '30px' }}>
-          <div className="section-header">
-            📊 NAHRÁNÍ EXCEL SOUBORU
-          </div>
-          <div style={{ padding: '30px' }}>
-            <div style={{ marginBottom: '20px' }}>
-              <label htmlFor="file-input" style={{ display: 'block', marginBottom: '10px', fontWeight: 'bold' }}>
-                Vyberte Excel soubor s daty:
-              </label>
+      <div className="space-y-10">
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+          <h1 className="text-2xl font-bold text-gray-800 mb-2">Import Excel výkazů</h1>
+          <p className="text-sm text-gray-600 mb-4">
+            Nahrajte jeden nebo více Excel souborů (.xlsx, .xls). Systém je zpracuje postupně
+            s vybraným měsícem a rokem.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className="block text-sm text-gray-600 font-semibold">Měsíc</label>
+              <select
+                value={month}
+                onChange={(e) => setMonth(parseInt(e.target.value, 10))}
+                className="border border-gray-300 rounded px-3 py-2 w-full"
+                disabled={excelUploading}
+              >
+                {monthOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 font-semibold">Rok</label>
               <input
-                id="file-input"
-                type="file"
-                accept=".xls,.xlsx"
-                onChange={handleFileChange}
-                style={{
-                  padding: '10px',
-                  border: '2px dashed var(--border-color)',
-                  borderRadius: '4px',
-                  width: '100%',
-                  cursor: 'pointer'
-                }}
+                type="number"
+                value={year}
+                onChange={(e) => setYear(parseInt(e.target.value, 10))}
+                className="border border-gray-300 rounded px-3 py-2 w-full"
+                disabled={excelUploading}
               />
             </div>
-            
-            {file && (
-              <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: 'var(--section-header)', borderRadius: '4px' }}>
-                <strong>Vybraný soubor:</strong> {file.name} ({(file.size / 1024).toFixed(2)} KB)
-              </div>
-            )}
-            
-            <button
-              className="btn btn-primary"
-              onClick={handleUpload}
-              disabled={!file || uploading}
-              style={{ opacity: (!file || uploading) ? 0.5 : 1 }}
-            >
-              {uploading ? 'Nahrávání...' : '📤 Nahrát a importovat'}
-            </button>
+            <div className="flex items-end justify-end gap-2">
+              <button
+                className="btn btn-outline"
+                onClick={() => resetQueue(setExcelQueue)}
+                disabled={excelUploading || excelQueue.length === 0}
+              >
+                Vyprázdnit seznam
+              </button>
+              <button
+                className="btn btn-success"
+                onClick={handleExcelUpload}
+                disabled={excelUploading || excelQueue.length === 0}
+              >
+                {excelUploading ? 'Nahrávám...' : 'Spustit import'}
+              </button>
+            </div>
+          </div>
+
+          {excelError && <div className="error-message mb-4">❌ {excelError}</div>}
+
+          <div
+            className={`drop-zone ${excelUploading ? 'disabled' : ''}`}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              appendToQueue(e.dataTransfer.files, setExcelQueue);
+            }}
+          >
+            <div className="drop-prompt">
+              <div className="upload-icon">⬆️</div>
+              <p className="drop-text">Přetáhněte soubory sem nebo klikněte pro výběr</p>
+              <input
+                id="excel-input"
+                type="file"
+                accept=".xlsx,.xls"
+                multiple
+                onChange={(e) => appendToQueue(e.target.files, setExcelQueue)}
+                disabled={excelUploading}
+                style={{ display: 'none' }}
+              />
+              <label htmlFor="excel-input" className="btn btn-primary" style={{ cursor: 'pointer' }}>
+                Vybrat soubory
+              </label>
+            </div>
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            {renderQueueTable('Excel', excelQueue, (id) => removeFromQueue(id, setExcelQueue))}
           </div>
         </div>
 
-        {uploadStatus.type && (
-          <div className={uploadStatus.type === 'success' ? 'info-box' : 'info-box'} 
-               style={{ 
-                 backgroundColor: uploadStatus.type === 'success' ? 'var(--section-header)' : '#ffebee',
-                 borderColor: uploadStatus.type === 'success' ? 'var(--status-success)' : 'var(--status-error)'
-               }}>
-            <p style={{ margin: 0 }}>
-              <strong>{uploadStatus.type === 'success' ? '✅' : '❌'}</strong> {uploadStatus.message}
-            </p>
-          </div>
-        )}
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+          <h2 className="text-2xl font-bold text-gray-800 mb-2">Import přijatých faktur (OCR)</h2>
+          <p className="text-sm text-gray-600 mb-4">
+            Nahrajte PDF faktury. Každá bude odeslána na OCR Mistral a položky následně schvalujete v záložce „Faktury přijaté“.
+          </p>
 
-        <div className="table-container">
-          <div className="section-header">
-            📋 FORMÁT EXCEL SOUBORU
+          <div className="flex items-center justify-between mb-4">
+            <button
+              className="btn btn-outline"
+              onClick={() => resetQueue(setInvoiceQueue)}
+              disabled={invoiceUploading || invoiceQueue.length === 0}
+            >
+              Vyprázdnit seznam
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={handleInvoiceUpload}
+              disabled={invoiceUploading || invoiceQueue.length === 0}
+            >
+              {invoiceUploading ? 'Nahrávám...' : 'Spustit import faktur'}
+            </button>
           </div>
-          <div style={{ padding: '20px' }}>
-            <p style={{ marginBottom: '15px' }}>
-              Excel soubor musí obsahovat následující sloupce:
-            </p>
-            <table>
-              <thead>
+
+          {invoiceError && <div className="error-message mb-4">❌ {invoiceError}</div>}
+
+          <div
+            className={`drop-zone ${invoiceUploading ? 'disabled' : ''}`}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              appendToQueue(e.dataTransfer.files, setInvoiceQueue);
+            }}
+          >
+            <div className="drop-prompt">
+              <div className="upload-icon">📄</div>
+              <p className="drop-text">Přetáhněte PDF faktury sem nebo klikněte pro výběr</p>
+              <input
+                id="invoice-input"
+                type="file"
+                accept="application/pdf"
+                multiple
+                onChange={(e) => appendToQueue(e.target.files, setInvoiceQueue)}
+                disabled={invoiceUploading}
+                style={{ display: 'none' }}
+              />
+              <label htmlFor="invoice-input" className="btn btn-secondary" style={{ cursor: 'pointer' }}>
+                Vybrat faktury
+              </label>
+            </div>
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            {renderQueueTable('Faktury', invoiceQueue, (id) => removeFromQueue(id, setInvoiceQueue))}
+          </div>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+          <div className="section-header mb-4">📋 FORMÁT EXCEL SOUBORU</div>
+          <p className="mb-4 text-sm text-gray-600">
+            Excel soubor musí obsahovat následující sloupce:
+          </p>
+          <div className="overflow-x-auto">
+            <table className="min-w-full border border-gray-200 text-sm">
+              <thead className="bg-gray-100">
                 <tr>
-                  <th>Sloupec</th>
-                  <th>Popis</th>
-                  <th>Příklad</th>
+                  <th className="px-3 py-2 text-left">Sloupec</th>
+                  <th className="px-3 py-2 text-left">Popis</th>
+                  <th className="px-3 py-2 text-left">Příklad</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
-                  <td><strong>Datum</strong></td>
-                  <td>Datum provedení práce</td>
-                  <td>15.7.2025</td>
+                  <td className="px-3 py-2 font-semibold">Datum</td>
+                  <td className="px-3 py-2">Datum provedení práce</td>
+                  <td className="px-3 py-2">15.7.2025</td>
                 </tr>
                 <tr>
-                  <td><strong>Organizace</strong></td>
-                  <td>Název organizace</td>
-                  <td>Lázně Toušeň</td>
+                  <td className="px-3 py-2 font-semibold">Organizace</td>
+                  <td className="px-3 py-2">Název organizace</td>
+                  <td className="px-3 py-2">Lázně Toušeň</td>
                 </tr>
                 <tr>
-                  <td><strong>Pracovník</strong></td>
-                  <td>Jméno pracovníka</td>
-                  <td>Jan Novák</td>
+                  <td className="px-3 py-2 font-semibold">Pracovník</td>
+                  <td className="px-3 py-2">Jméno pracovníka</td>
+                  <td className="px-3 py-2">Jan Novák</td>
                 </tr>
                 <tr>
-                  <td><strong>Popis</strong></td>
-                  <td>Popis vykonané práce</td>
-                  <td>Instalace softwaru</td>
+                  <td className="px-3 py-2 font-semibold">Popis</td>
+                  <td className="px-3 py-2">Popis vykonané práce</td>
+                  <td className="px-3 py-2">Instalace softwaru</td>
                 </tr>
                 <tr>
-                  <td><strong>Hodiny</strong></td>
-                  <td>Počet odpracovaných hodin</td>
-                  <td>2:30</td>
+                  <td className="px-3 py-2 font-semibold">Hodiny</td>
+                  <td className="px-3 py-2">Počet odpracovaných hodin</td>
+                  <td className="px-3 py-2">2:30</td>
                 </tr>
                 <tr>
-                  <td><strong>Km</strong></td>
-                  <td>Počet ujetých kilometrů</td>
-                  <td>25</td>
+                  <td className="px-3 py-2 font-semibold">Km</td>
+                  <td className="px-3 py-2">Počet ujetých kilometrů</td>
+                  <td className="px-3 py-2">25</td>
                 </tr>
               </tbody>
             </table>
-            
-            <div style={{ marginTop: '20px', padding: '15px', backgroundColor: 'var(--info-box)', borderRadius: '4px' }}>
-              <p style={{ margin: '0 0 10px 0' }}>
-                <strong>💡 Tip:</strong> První řádek musí obsahovat názvy sloupců. Data začínají od druhého řádku.
-              </p>
-              <button 
-                onClick={async () => {
-                  const token = localStorage.getItem('token');
-                  const response = await fetch('/api/import/template', {
-                    headers: {
-                      'Authorization': `Bearer ${token}`
-                    }
-                  });
-                  if (response.ok) {
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'vzor_import.xlsx';
-                    a.click();
-                  }
-                }}
-                className="btn btn-secondary"
-              >
-                📥 Stáhnout vzorový soubor
-              </button>
-            </div>
+          </div>
+          <div className="mt-4 bg-yellow-50 border border-yellow-200 text-sm text-yellow-800 p-3 rounded">
+            💡 Tip: první řádek musí obsahovat názvy sloupců. Data začínají od druhého řádku.
           </div>
         </div>
       </div>
+
+      <style jsx>{`
+        .drop-zone {
+          border: 2px dashed var(--border-color);
+          border-radius: 10px;
+          padding: 30px;
+          text-align: center;
+          transition: border-color 0.2s ease;
+          background: var(--white);
+        }
+
+        .drop-zone.disabled {
+          opacity: 0.6;
+          pointer-events: none;
+        }
+
+        .drop-zone:hover {
+          border-color: var(--primary-green);
+        }
+
+        .drop-prompt {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 10px;
+          color: var(--text-secondary);
+        }
+
+        .upload-icon {
+          font-size: 32px;
+        }
+
+        .drop-text {
+          font-size: 14px;
+        }
+
+        .error-message {
+          background: #fdecea;
+          border: 1px solid #f5c2c7;
+          color: #b02a37;
+          padding: 12px 16px;
+          border-radius: 6px;
+        }
+      `}</style>
     </Layout>
   );
-}
+};
+
+export default ImportPage;

@@ -236,17 +236,17 @@ export default function Dashboard() {
           <div className="quick-actions">
             <h2>RYCHLÉ AKCE</h2>
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-              <Link href="/import">
-                <a className="btn btn-primary no-print">📊 Import dat z Excelu</a>
+              <Link href="/import" className="btn btn-primary no-print">
+                📊 Import dat z Excelu
               </Link>
-              <Link href="/invoices/new">
-                <a className="btn btn-secondary no-print">Vygenerovat faktury</a>
+              <Link href="/invoices/new" className="btn btn-secondary no-print">
+                Vygenerovat faktury
               </Link>
-              <Link href="/export">
-                <a className="btn btn-warning no-print">Export do Pohoda XML</a>
+              <Link href="/export" className="btn btn-warning no-print">
+                Export do Pohoda XML
               </Link>
-              <Link href="/reports">
-                <a className="btn btn-outline no-print">Měsíční report</a>
+              <Link href="/reports" className="btn btn-outline no-print">
+                Měsíční report
               </Link>
             </div>
           </div>

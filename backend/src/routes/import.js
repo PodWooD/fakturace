@@ -96,6 +96,10 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
 
     // Zpracování dat
     let importedCount = 0;
+    let skippedRows = 0;
+    let newOrganizations = 0;
+    const affectedOrganizationIds = new Set();
+    const newlyCreatedOrganizations = [];
     const errors = [];
 
     for (let i = 0; i < data.length; i++) {
@@ -114,6 +118,7 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
         const km = row['Výjezd (km)'] || row.Km || 0;
         
         if (!row.Datum || !organizace || !row.Pracovník || !popis) {
+          skippedRows++;
           errors.push(`Řádek ${i + 2}: Chybí povinné údaje (Datum: ${row.Datum}, Organizace: ${organizace}, Pracovník: ${row.Pracovník}, Popis: ${popis})`);
           continue;
         }
@@ -146,17 +151,17 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
         const orgCode = orgMapping ? orgMapping.code : null;
 
         // Najdi nebo vytvoř organizaci
+        const organizationWhere = [];
+        if (orgCode) {
+          organizationWhere.push({ code: orgCode });
+        }
+        if (orgName) {
+          organizationWhere.push({ name: orgName });
+        }
+
         let organization = await prisma.organization.findFirst({
           where: {
-            OR: [
-              { code: orgCode },
-              { 
-                name: {
-                  contains: orgName,
-                  mode: 'insensitive'
-                }
-              }
-            ]
+            OR: organizationWhere
           }
         });
 
@@ -171,7 +176,15 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
               createdBy: req.user.id
             }
           });
+          newOrganizations++;
+          newlyCreatedOrganizations.push({
+            id: organization.id,
+            name: organization.name,
+            code: organization.code
+          });
         }
+
+        affectedOrganizationIds.add(organization.id);
 
         // Získej zakázku (projektový kód)
         const projectCode = row.Zakázka || row['Zakázka'] || null;
@@ -180,22 +193,23 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
         let billingOrgId = null;
         if (projectCode && organizationMapping[projectCode]) {
           const billingOrgMapping = organizationMapping[projectCode];
+          const billingOrgWhere = [];
+          if (billingOrgMapping.code) {
+            billingOrgWhere.push({ code: billingOrgMapping.code });
+          }
+          if (billingOrgMapping.name) {
+            billingOrgWhere.push({ name: billingOrgMapping.name });
+          }
+
           const billingOrg = await prisma.organization.findFirst({
             where: {
-              OR: [
-                { code: billingOrgMapping.code },
-                { 
-                  name: {
-                    contains: billingOrgMapping.name,
-                    mode: 'insensitive'
-                  }
-                }
-              ]
+              OR: billingOrgWhere
             }
           });
           
           if (billingOrg) {
             billingOrgId = billingOrg.id;
+            affectedOrganizationIds.add(billingOrg.id);
           } else {
             // Vytvoř novou organizaci pro fakturaci
             const newBillingOrg = await prisma.organization.create({
@@ -209,6 +223,13 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
               }
             });
             billingOrgId = newBillingOrg.id;
+            newOrganizations++;
+            affectedOrganizationIds.add(newBillingOrg.id);
+            newlyCreatedOrganizations.push({
+              id: newBillingOrg.id,
+              name: newBillingOrg.name,
+              code: newBillingOrg.code
+            });
           }
         }
 
@@ -235,14 +256,21 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
 
         importedCount++;
       } catch (error) {
+        skippedRows++;
         errors.push(`Řádek ${i + 2}: ${error.message}`);
       }
     }
 
     res.json({
       success: true,
-      recordsCount: importedCount,
-      totalRows: data.length,
+      imported: importedCount,
+      organizations: affectedOrganizationIds.size,
+      details: {
+        totalRows: data.length,
+        skippedRows,
+        newOrganizations
+      },
+      newlyCreatedOrganizations,
       errors: errors
     });
 

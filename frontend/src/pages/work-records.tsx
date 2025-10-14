@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '@/components/Layout';
+import WorkRecordForm from '@/components/WorkRecordForm';
 import { API_URL } from '../config/api';
 
 interface User {
@@ -18,6 +19,9 @@ interface WorkRecord {
   minutes: number;
   hours: string;
   kilometers: number;
+  timeFrom?: string;
+  timeTo?: string;
+  branch?: string;
   organization: {
     id: number;
     name: string;
@@ -61,6 +65,8 @@ export default function WorkRecords() {
     worker: ''
   });
   const [organizations, setOrganizations] = useState<any[]>([]);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingRecord, setEditingRecord] = useState<WorkRecord | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -153,6 +159,49 @@ export default function WorkRecords() {
     return new Date(dateString).toLocaleDateString('cs-CZ');
   };
 
+  const handleFormSuccess = () => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      fetchWorkRecords(token);
+    }
+    setEditingRecord(null);
+  };
+
+  const handleEdit = (record: WorkRecord) => {
+    setEditingRecord(record);
+    setIsFormOpen(true);
+  };
+
+  const handleDelete = async (recordId: number) => {
+    if (!confirm('Opravdu chcete smazat tento výkaz práce?')) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_URL}/api/work-records/${recordId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        fetchWorkRecords(token);
+      } else {
+        alert('Chyba při mazání záznamu');
+      }
+    } catch (error) {
+      console.error('Error deleting record:', error);
+      alert('Chyba při mazání záznamu');
+    }
+  };
+
+  const handleCloseForm = () => {
+    setIsFormOpen(false);
+    setEditingRecord(null);
+  };
+
   if (!user) {
     return null;
   }
@@ -160,7 +209,12 @@ export default function WorkRecords() {
   return (
     <Layout user={user}>
       <div className="container">
-        <h1>Výkazy práce</h1>
+        <div className="header-row">
+          <h1>Výkazy práce</h1>
+          <button className="btn btn-primary" onClick={() => setIsFormOpen(true)}>
+            + Nový výkaz
+          </button>
+        </div>
         
         {/* Filtry */}
         <div className="filter-section">
@@ -238,13 +292,15 @@ export default function WorkRecords() {
                     <th>Datum</th>
                     <th>Pracovník</th>
                     <th>Organizace</th>
-                    <th>Zakázka</th>
+                    <th>Pobočka</th>
+                    <th>Čas od-do</th>
                     <th>Popis práce</th>
                     <th style={{ textAlign: 'center' }}>Hodiny</th>
                     <th style={{ textAlign: 'center' }}>Km</th>
                     <th style={{ textAlign: 'right' }}>Za hodiny</th>
                     <th style={{ textAlign: 'right' }}>Za km</th>
                     <th style={{ textAlign: 'right' }}>Celkem</th>
+                    <th style={{ textAlign: 'center' }}>Akce</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -260,8 +316,14 @@ export default function WorkRecords() {
                           </span>
                         )}
                       </td>
-                      <td>{record.projectCode || '-'}</td>
-                      <td style={{ maxWidth: '300px' }}>{record.description}</td>
+                      <td>{record.branch || '-'}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        {record.timeFrom && record.timeTo
+                          ? `${record.timeFrom} - ${record.timeTo}`
+                          : '-'
+                        }
+                      </td>
+                      <td style={{ maxWidth: '250px' }}>{record.description}</td>
                       <td style={{ textAlign: 'center' }}>{record.hours}</td>
                       <td style={{ textAlign: 'center' }}>{record.kilometers}</td>
                       <td style={{ textAlign: 'right' }}>
@@ -272,6 +334,24 @@ export default function WorkRecords() {
                       </td>
                       <td style={{ textAlign: 'right', fontWeight: 'bold' }}>
                         {parseFloat(record.totalAmount).toLocaleString('cs-CZ')} Kč
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <div style={{ display: 'flex', gap: '5px', justifyContent: 'center' }}>
+                          <button
+                            className="btn-icon"
+                            onClick={() => handleEdit(record)}
+                            title="Upravit"
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            className="btn-icon delete"
+                            onClick={() => handleDelete(record.id)}
+                            title="Smazat"
+                          >
+                            🗑️
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -306,9 +386,27 @@ export default function WorkRecords() {
             </>
           )}
         </div>
+
+        <WorkRecordForm
+          isOpen={isFormOpen}
+          onClose={handleCloseForm}
+          onSuccess={handleFormSuccess}
+          editingRecord={editingRecord}
+        />
       </div>
 
       <style jsx>{`
+        .header-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 20px;
+        }
+
+        .header-row h1 {
+          margin: 0;
+        }
+
         .filter-section {
           background: var(--white);
           border: 1px solid var(--border-color);
@@ -367,6 +465,24 @@ export default function WorkRecords() {
         table td:nth-child(5) {
           white-space: normal;
           line-height: 1.4;
+        }
+
+        .btn-icon {
+          background: none;
+          border: none;
+          font-size: 18px;
+          cursor: pointer;
+          padding: 4px;
+          border-radius: 4px;
+          transition: background-color 0.2s;
+        }
+
+        .btn-icon:hover {
+          background: var(--bg-secondary);
+        }
+
+        .btn-icon.delete:hover {
+          background: #ffebee;
         }
       `}</style>
     </Layout>

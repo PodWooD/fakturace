@@ -217,8 +217,8 @@ export default function Export() {
       <div className="container">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
           <h1>Export do Pohoda XML</h1>
-          <Link href="/dashboard">
-            <a className="btn btn-outline">← Zpět na dashboard</a>
+          <Link href="/dashboard" className="btn btn-outline">
+            ← Zpět na dashboard
           </Link>
         </div>
 
@@ -326,7 +326,7 @@ export default function Export() {
                     </td>
                     <td>
                       <Link href={`/invoices/${invoice.id}`}>
-                        <a>{invoice.invoiceNumber}</a>
+                        {invoice.invoiceNumber}
                       </Link>
                     </td>
                     <td>{invoice.organization.name}</td>

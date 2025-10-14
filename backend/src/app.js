@@ -29,6 +29,8 @@ app.use('/api/work-records', require('./routes/workRecords'));
 app.use('/api/invoices', require('./routes/invoices'));
 app.use('/api/services', require('./routes/services'));
 app.use('/api/hardware', require('./routes/hardware'));
+app.use('/api/received-invoices', require('./routes/receivedInvoices'));
+app.use('/api/billing', require('./routes/billing'));
 
 // Error handling
 app.use((err, req, res, next) => {
@@ -36,6 +38,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend server běží na portu ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Backend server běží na portu ${PORT}`);
+  });
+}
+
+module.exports = app;

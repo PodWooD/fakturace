@@ -223,8 +223,8 @@ export default function Reports() {
             <button onClick={handleExportCSV} className="btn btn-secondary no-print">
               📊 Export CSV
             </button>
-            <Link href="/dashboard">
-              <a className="btn btn-outline no-print">← Dashboard</a>
+            <Link href="/dashboard" className="btn btn-outline no-print">
+              ← Dashboard
             </Link>
           </div>
         </div>

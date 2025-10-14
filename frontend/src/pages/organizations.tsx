@@ -49,11 +49,12 @@ export default function Organizations() {
     monthlyServices: 0,
     avgHourlyRate: 0
   });
+  const [highlightedOrgId, setHighlightedOrgId] = useState<number | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     const userData = localStorage.getItem('user');
-    
+
     if (!token) {
       router.push('/login');
       return;
@@ -64,6 +65,29 @@ export default function Organizations() {
     }
     fetchOrganizations(token);
   }, [router]);
+
+  useEffect(() => {
+    const highlightParam = router.query.highlight;
+    if (!highlightParam) return;
+
+    const parsed = Array.isArray(highlightParam)
+      ? parseInt(highlightParam[0] as string, 10)
+      : parseInt(highlightParam, 10);
+
+    if (!Number.isNaN(parsed)) {
+      setHighlightedOrgId(parsed);
+      const target = document.getElementById(`organization-${parsed}`);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      const timeout = setTimeout(() => {
+        setHighlightedOrgId(null);
+      }, 6000);
+
+      return () => clearTimeout(timeout);
+    }
+  }, [router.query.highlight]);
 
   const fetchOrganizations = async (token: string) => {
     try {
@@ -89,10 +113,23 @@ export default function Organizations() {
   const calculateStats = (orgs: Organization[]) => {
     const totalOrgs = orgs.length;
     const avgHourlyRate = orgs.reduce((sum, org) => sum + parseFloat(org.hourlyRate || '0'), 0) / (totalOrgs || 1);
-    // TODO: Calculate monthly services from actual services data
+
+    // Výpočet celkového měsíčního příjmu z paušálních služeb
+    const monthlyServices = orgs.reduce((sum, org) => {
+      if (org.services && Array.isArray(org.services)) {
+        const orgServicesTotal = org.services
+          .filter((service: any) => service.isActive !== false)
+          .reduce((serviceSum: number, service: any) => {
+            return serviceSum + (parseFloat(service.monthlyPrice || '0'));
+          }, 0);
+        return sum + orgServicesTotal;
+      }
+      return sum;
+    }, 0);
+
     setStats({
       totalOrgs,
-      monthlyServices: 0,
+      monthlyServices,
       avgHourlyRate
     });
   };
@@ -203,7 +240,11 @@ export default function Organizations() {
             </thead>
             <tbody>
               {organizations.map((org) => (
-                <tr key={org.id}>
+                <tr
+                  key={org.id}
+                  id={`organization-${org.id}`}
+                  className={highlightedOrgId === org.id ? 'bg-yellow-100 transition-colors' : ''}
+                >
                   <td className="font-bold text-green-600">{org.code}</td>
                   <td className="font-medium">{org.name}</td>
                   <td>{org.contactPerson || '-'}</td>
