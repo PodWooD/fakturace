@@ -428,13 +428,10 @@ const FakturacePage: React.FC = () => {
   const handleServiceChange = (index: number, field: keyof ServiceItem, value: string) => {
     updateDraft((prev) => {
       const services = [...prev.services];
-      const updated = { ...services[index] };
-      if (field === 'monthlyPrice') {
-        updated[field] = toNumber(value);
-      } else {
-        updated[field] = value as any;
-      }
-      services[index] = updated;
+      services[index] = {
+        ...services[index],
+        [field]: field === 'monthlyPrice' ? toNumber(value) : value
+      } as ServiceItem;
       return { ...prev, services };
     });
   };
@@ -442,14 +439,14 @@ const FakturacePage: React.FC = () => {
   const handleWorkEntryChange = (index: number, field: keyof WorkEntry, value: string) => {
     updateDraft((prev) => {
       const entries = [...prev.work.entries];
-      const updated = { ...entries[index] };
+      const updated = { ...entries[index] } as WorkEntry;
       if (['minutes', 'hours', 'kilometers', 'hourlyAmount', 'kmAmount'].includes(field)) {
-        updated[field] = toNumber(value);
+        updated[field] = toNumber(value) as never;
         if (field === 'hours') {
           updated.minutes = Math.round(toNumber(value) * 60);
         }
       } else {
-        updated[field] = value as any;
+        updated[field] = value as never;
       }
       entries[index] = updated;
       return {
@@ -470,14 +467,14 @@ const FakturacePage: React.FC = () => {
   ) => {
     updateDraft((prev) => {
       const list = [...prev[key]];
-      const updated = { ...list[index] };
+      const updated = { ...list[index] } as InventoryItem;
       if (['quantity', 'unitPrice', 'totalPrice'].includes(field)) {
-        updated[field] = toNumber(value);
+        updated[field] = toNumber(value) as never;
         if (field === 'quantity' || field === 'unitPrice') {
           updated.totalPrice = toNumber(updated.quantity) * toNumber(updated.unitPrice);
         }
       } else {
-        updated[field] = value as any;
+        updated[field] = value as never;
       }
       list[index] = updated;
       return {

@@ -187,7 +187,10 @@ export default function WorkRecords() {
       });
 
       if (response.ok) {
-        fetchWorkRecords(token);
+        const token = localStorage.getItem('token');
+        if (token) {
+          fetchWorkRecords(token);
+        }
       } else {
         alert('Chyba při mazání záznamu');
       }
