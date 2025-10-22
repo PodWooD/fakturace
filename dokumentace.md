@@ -46,14 +46,13 @@ Systém automatizované fakturace pro IT služby, který umožňuje import praco
 - **PDFKit** - generování PDF
 
 ### Frontend
-- **Next.js 14** - React framework
-- **TypeScript** - typový systém
-- **Tailwind CSS** - styling
-- **React Hook Form** - formuláře
-- **TanStack Query** - state management
-- **TanStack Table** - tabulky
-- **Recharts** - grafy
-- **Axios** - HTTP klient
+- **Next.js 14 (App Router)** – rendering + routing
+- **TypeScript** – typování
+- **Mantine 7** – komponenty a styling
+- **React Hook Form + Zod** – formuláře a validace
+- **TanStack Query** – datová vrstva (fetch & cache)
+- **Day.js / date-fns** – práce s daty
+- **Axios** – HTTP klient
 
 ### DevOps
 - **PM2** - process manager
@@ -69,27 +68,28 @@ fakturace/
 ├── backend/
 │   ├── src/
 │   │   ├── app.js               # Hlavní Express aplikace
-│   │   ├── middleware/          # Autentizace a pomocné middleware
-│   │   ├── routes/              # REST API routy (auth, import, invoices…)
-│   │   └── services/            # PDF a Pohoda export
+│   │   ├── middleware/          # Autentizace, CORS...
+│   │   ├── routes/              # REST API (organizations, invoices, received-invoices…)
+│   │   ├── services/            # OCR, PDF, Pohoda export, storage
+│   │   ├── queues/              # BullMQ fronty (OCR/PDF/Pohoda)
+│   │   └── utils/               # Money helpers, validators
 │   ├── prisma/
 │   │   ├── schema.prisma        # Databázové schéma
-│   │   └── seed.js              # Výchozí data
-│   ├── package.json
-│   └── package-lock.json
+│   │   ├── migrations/          # Verzované migrace
+│   │   └── seed.js              # Výchozí data (admin, organizace)
+│   └── package.json
 ├── frontend/
 │   ├── src/
-│   │   ├── components/          # Sdílené layouty a UI prvky
-│   │   ├── config/              # API konfigurace
-│   │   ├── pages/               # Next.js stránky (dashboard, faktury…)
-│   │   └── styles/              # Globální styly
-│   ├── package.json
-│   └── next.config.js
-├── docs/                        # Detailní dokumentace
-├── start.sh                     # Spouštěcí skript pro PM2
-├── ecosystem.config.js          # PM2 konfigurace
-├── README.md
-└── LICENSE
+│   │   ├── app/                 # Next.js App Router – rozložení a stránky
+│   │   ├── components/          # Sdílené UI prvky
+│   │   ├── lib/                 # API klient, auth context, utilities
+│   │   └── styles/              # Globální styly / mantine theme overrides
+│   └── package.json
+├── docs/                        # Uživatelská a integrační dokumentace
+├── docker-compose.yml           # PostgreSQL + Redis + MinIO pro vývoj
+├── ecosystem.config.js          # PM2 konfigurace (backend, frontend, queue worker)
+├── start.sh / stop.sh           # Pomocné skripty pro PM2
+└── README.md
 ```
 
 ---
@@ -116,58 +116,40 @@ chmod +x setup.sh
 #### Kroky instalace
 
 ```bash
-# 1. Aktualizace systému
-sudo apt update && sudo apt upgrade -y
+# 1. (volitelné) Vytvoření infrastruktury
+docker compose up -d       # PostgreSQL + Redis + MinIO s výchozím nastavením
 
-# 2. Instalace Node.js
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# 3. Instalace PostgreSQL
-sudo apt install postgresql postgresql-contrib -y
-
-# 4. Instalace PM2
-sudo npm install -g pm2
-
-# 5. Klonování repozitáře
-git clone [váš-repozitář]
-cd fakturace-system
-
-# 6. Instalace závislostí
-cd backend && npm install
-cd ../frontend && npm install
-
-# 7. Nastavení databáze
-sudo -u postgres psql
-CREATE DATABASE fakturace_db;
-CREATE USER fakturace_user WITH ENCRYPTED PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE fakturace_db TO fakturace_user;
-\q
-
-# 8. Konfigurace prostředí
+# 2. Backend
 cd backend
-cp .env.example .env
-nano .env  # Upravte hodnoty
-
-# 9. Migrace databáze
+npm install
+cp .env.example .env       # upravte DATABASE_URL, MinIO, Redis
 npx prisma migrate deploy
-npx prisma db seed
+npm run seed
+npm run dev                # vývojový server (http://localhost:3029)
 
-# 10. Build frontend
+# 3. Frontend
 cd ../frontend
-npm run build
+npm install
+cp .env.local.example .env.local  # případně změňte NEXT_PUBLIC_API_URL
+npm run dev                       # http://localhost:3030
 
-# 11. Spuštění aplikace
-cd ..
-pm2 start ecosystem.config.js
+# 4. (volitelné) Worker pro fronty OCR/PDF/Pohoda
+cd ../backend
+npm run worker
+
+# 5. Produkční start (alternativa k vývoji)
+# frontend: npm run build && npm start
+# backend:  npm run start  (případně pm2 start ecosystem.config.js)
 ```
+
+> PM2 konfigurace (`ecosystem.config.js`) spouští backend, frontend a queue worker. Před tím zajistěte běžící Redis.
 
 ### 3. Environment proměnné
 
 ```env
 # Backend (.env)
 NODE_ENV=production
-PORT=3002
+PORT=3029
 DATABASE_URL="postgresql://fakturace_user:password@localhost:5432/fakturace_db"
 JWT_SECRET=your-super-secret-jwt-key
 CORS_ORIGIN=http://localhost:3030
@@ -430,9 +412,9 @@ Authorization: Bearer <token>
 
 ### Dashboard
 - Přehledové statistiky
-- Rychlé akce
 - Seznam nedokončených faktur
 - Grafy a vizualizace
+- Upozornění na organizace bez faktury
 
 ### Správa organizací
 - Tabulka s inline editací
@@ -687,7 +669,7 @@ module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 3002
+        PORT: 3029
       }
     },
     {
@@ -726,7 +708,7 @@ server {
 
     # Backend API
     location /api {
-        proxy_pass http://localhost:3002;
+        proxy_pass http://localhost:3029;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -734,10 +716,7 @@ server {
         proxy_cache_bypass $http_upgrade;
     }
 
-    # Uploaded files
-    location /uploads {
-        alias /home/user/fakturace-system/backend/uploads;
-    }
+    # Soubory (PDF/ISDOC) se stahují přes backend endpoints, veřejná cesta /uploads již není potřeba
 }
 ```
 
@@ -895,7 +874,7 @@ sudo -u postgres psql -d fakturace_db
 # Port je obsazený
 netstat -tulpn | grep :3030
 # Kontrola běžícího backendu
-netstat -tulpn | grep :3002
+netstat -tulpn | grep :3029
 
 # Chybějící závislosti
 cd backend && npm install
@@ -952,7 +931,7 @@ chmod +x scripts/setup.sh
 
 # 4. Otevření v prohlížeči
 # Frontend: http://localhost:3030
-# API: http://localhost:3002
+# API: http://localhost:3029
 
 # 5. Přihlášení
 # Email: admin@fakturace.cz

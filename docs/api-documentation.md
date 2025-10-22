@@ -2,7 +2,7 @@
 
 ## Základní informace
 
-**Base URL:** `http://localhost:3002/api`  
+**Base URL:** `http://localhost:3029/api`  
 **Autentizace:** Bearer Token (JWT)  
 **Content-Type:** `application/json` (pokud není uvedeno jinak)
 
@@ -201,7 +201,7 @@ Content-Type: multipart/form-data
 
 ### 🧾 Přijaté faktury (OCR)
 
-#### Nahrání faktury (OCR nebo JSON)
+#### Nahrání faktury (PDF/ISDOC/JSON)
 ```http
 POST /received-invoices/upload
 Authorization: Bearer <token>
@@ -209,8 +209,11 @@ Content-Type: multipart/form-data | application/json
 ```
 
 **Varianty vstupu:**
-- `multipart/form-data` s polem `file` (PDF/JPEG). Backend převádí dokument na Base64 a volá API Mistral OCR (`MISTRAL_OCR_*`).
-- `application/json` – manuálně poskytnutý výstup OCR (`invoiceNumber`, `supplierName`, `items`…).
+- `multipart/form-data` s polem `file`
+  - PDF/JPEG → dokument projde OCR (Mistral) a výsledek se uloží jako rozpad položek.
+  - ISDOC/ISDOCX → XML se parsuje lokálně, bez volání OCR, a položky se převezmou přímo z faktury.
+- `application/json` – ručně poskytnutý výstup OCR (`invoiceNumber`, `supplierName`, `items`…).
+- Backend vždy rozdělí řádky tak, aby **každá položka měla množství 1** (např. množství 3 → tři samostatné položky). Záporné částky (slevy) se uchovávají jako samostatné položky pro následné párování ve frontendové aplikaci.
 
 **Response:** `201 Created`
 ```json
@@ -224,11 +227,33 @@ Content-Type: multipart/form-data | application/json
   "items": [
     {
       "id": 34,
-      "itemName": "Switch 24p",
+      "itemName": "Switch 24p (1/3)",
       "quantity": 1,
       "unitPrice": "4500",
       "totalPrice": "4500",
-      "status": "PENDING"
+      "status": "PENDING",
+      "productCode": "SW24P",
+      "referenceProductCode": "SW24P"
+    },
+    {
+      "id": 35,
+      "itemName": "Switch 24p (2/3)",
+      "quantity": 1,
+      "unitPrice": "4500",
+      "totalPrice": "4500",
+      "status": "PENDING",
+      "productCode": "SW24P",
+      "referenceProductCode": "SW24P"
+    },
+    {
+      "id": 36,
+      "itemName": "Sleva 15% k položce SW24P",
+      "quantity": 1,
+      "unitPrice": "-1350",
+      "totalPrice": "-1350",
+      "status": "PENDING",
+      "productCode": "SL083d6",
+      "referenceProductCode": "SW24P"
     }
   ]
 }
@@ -247,6 +272,8 @@ Authorization: Bearer <token>
 GET /received-invoices/:id
 Authorization: Bearer <token>
 ```
+
+**Poznámka:** API vrací lineární seznam již rozdělených položek (po 1 ks). Frontend následně seskupuje slevy k odpovídajícím položkám a zvýrazňuje kontrolní součet oproti částce faktury.
 
 #### Uložení upravených položek
 ```http
@@ -684,6 +711,14 @@ Authorization: Bearer <token>
 
 **Response:** XML soubor pro import do Pohody
 
+#### Export ISDOC
+```http
+GET /invoices/:id/isdoc
+Authorization: Bearer <token>
+```
+
+**Response:** ISDOC dokument ve formátu XML
+
 #### Export faktury (alias)
 ```http
 GET /invoices/:id/export
@@ -764,21 +799,81 @@ API má nastaven rate limit:
 
 Při překročení limitu obdržíte odpověď `429 Too Many Requests`.
 
+## Systémové endpointy
+
+### /metrics
+```http
+GET /metrics
+```
+
+Prometheus kompatibilní metriky (fronty, runtime).
+
+### /api/system/queues
+```http
+GET /api/system/queues
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "queues": {
+    "ocr": { "enabled": true, "counts": { "waiting": 0, "failed": 0 } },
+    "pdf": { "enabled": true, "counts": { ... } },
+    "pohoda": { "enabled": true, "counts": { ... } },
+    "isdoc": { "enabled": true, "counts": { ... } },
+    "notifications": { "enabled": true, "counts": { ... } }
+  }
+}
+```
+
+### /api/notifications
+```http
+GET /api/notifications?unread=true
+Authorization: Bearer <token>
+```
+
+Vrací seznam notifikací (OCR selhání apod.).
+
+### /api/notifications/:id/read
+```http
+POST /api/notifications/:id/read
+Authorization: Bearer <token>
+```
+
+Označí konkrétní notifikaci jako přečtenou.
+
+### /api/notifications/read-all
+```http
+POST /api/notifications/read-all
+Authorization: Bearer <token>
+```
+
+Označí všechny nepřečtené notifikace jako přečtené (pro daného uživatele).
+
+### /api/users (ADMIN)
+- `GET /api/users`
+- `POST /api/users`
+- `PUT /api/users/:id`
+- `DELETE /api/users/:id`
+
+Správa uživatelů a jejich rolí (`users:manage`).
+
 ## Příklady použití
 
 ### cURL
 ```bash
 # Login
-curl -X POST http://localhost:3002/api/auth/login \
+curl -X POST http://localhost:3029/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@fakturace.cz","password":"admin123"}'
 
 # Seznam organizací
-curl http://localhost:3002/api/organizations \
+curl http://localhost:3029/api/organizations \
   -H "Authorization: Bearer <token>"
 
 # Import Excel
-curl -X POST http://localhost:3002/api/import \
+curl -X POST http://localhost:3029/api/import \
   -H "Authorization: Bearer <token>" \
   -F "file=@vykaz.xlsx" \
   -F "month=7" \

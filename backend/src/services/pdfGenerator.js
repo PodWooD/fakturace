@@ -1,6 +1,5 @@
 const PDFDocument = require('pdfkit');
-const fs = require('fs');
-const path = require('path');
+const storageService = require('./storageService');
 
 class PDFGenerator {
   constructor() {
@@ -171,10 +170,17 @@ class PDFGenerator {
       .fontSize(10)
       .font('Helvetica');
 
+    const issuedAt = invoice.generatedAt ? new Date(invoice.generatedAt) : new Date();
+    const taxDate = invoice.generatedAt ? new Date(invoice.generatedAt) : issuedAt;
+    const dueDateSource = invoice.dueDate ? new Date(invoice.dueDate) : issuedAt;
+    const dueDate = Number.isNaN(dueDateSource.getTime())
+      ? this._addDays(issuedAt, 14)
+      : dueDateSource;
+
     // Levý sloupec
-    this.doc.text(`Datum vystavení: ${this._formatDate(invoice.generatedAt)}`, leftCol, infoY);
-    this.doc.text(`Datum zdanitelného plnění: ${this._formatDate(invoice.generatedAt)}`, leftCol, infoY + 20);
-    this.doc.text(`Datum splatnosti: ${this._formatDate(this._addDays(invoice.generatedAt, 14))}`, leftCol, infoY + 40);
+    this.doc.text(`Datum vystavení: ${this._formatDate(issuedAt)}`, leftCol, infoY);
+    this.doc.text(`Datum zdanitelného plnění: ${this._formatDate(taxDate)}`, leftCol, infoY + 20);
+    this.doc.text(`Datum splatnosti: ${this._formatDate(dueDate)}`, leftCol, infoY + 40);
 
     // Pravý sloupec
     this.doc.text(`Forma úhrady: Převodem`, rightCol, infoY);
@@ -281,9 +287,9 @@ class PDFGenerator {
         xPos += colWidths.quantity;
         this.doc.text('km', xPos, this.currentY, { width: colWidths.unit, align: 'center' });
         xPos += colWidths.unit;
-        this.doc.text(`${parseFloat(organization.kmRate).toFixed(2)}`, xPos, this.currentY, { width: colWidths.unitPrice, align: 'right' });
+        this.doc.text(`${parseFloat(organization.kilometerRate).toFixed(2)}`, xPos, this.currentY, { width: colWidths.unitPrice, align: 'right' });
         xPos += colWidths.unitPrice;
-        this.doc.text(`${(totalKm * parseFloat(organization.kmRate)).toFixed(2)}`, xPos, this.currentY, { width: colWidths.total, align: 'right' });
+        this.doc.text(`${(totalKm * parseFloat(organization.kilometerRate)).toFixed(2)}`, xPos, this.currentY, { width: colWidths.total, align: 'right' });
         this.currentY += 20;
       }
     }
@@ -363,8 +369,14 @@ class PDFGenerator {
   }
 
   _formatDate(date) {
-    const d = new Date(date);
-    return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+    const d = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(d.getTime())) {
+      return '-';
+    }
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}.${month}.${year}`;
   }
 
   _addDays(date, days) {
@@ -376,23 +388,18 @@ class PDFGenerator {
   async saveInvoicePDF(invoice, workRecords, services, hardware, organization) {
     try {
       const pdfBuffer = await this.generateInvoice(invoice, workRecords, services, hardware, organization);
-      
-      // Vytvoř adresář pro faktury pokud neexistuje
-      const invoicesDir = path.join(__dirname, '../../uploads/invoices');
-      if (!fs.existsSync(invoicesDir)) {
-        fs.mkdirSync(invoicesDir, { recursive: true });
-      }
 
-      // Uložení souboru
-      const filename = `${invoice.invoiceNumber}.pdf`;
-      const filepath = path.join(invoicesDir, filename);
-      
-      fs.writeFileSync(filepath, pdfBuffer);
+      const stored = await storageService.saveFile({
+        buffer: pdfBuffer,
+        prefix: 'exports/invoices',
+        extension: '.pdf',
+        contentType: 'application/pdf',
+      });
 
       return {
-        filename,
-        path: `/uploads/invoices/${filename}`,
-        size: pdfBuffer.length
+        filename: `${invoice.invoiceNumber}.pdf`,
+        location: stored.location,
+        size: stored.size,
       };
     } catch (error) {
       throw new Error(`Chyba při ukládání PDF: ${error.message}`);

@@ -3,12 +3,11 @@
 ## 📋 Obsah
 
 1. [Požadavky](#požadavky)
-2. [Rychlá instalace](#rychlá-instalace)
-3. [Manuální instalace](#manuální-instalace)
-4. [Konfigurace](#konfigurace)
-5. [První spuštění](#první-spuštění)
-6. [Produkční nasazení](#produkční-nasazení)
-7. [Řešení problémů](#řešení-problémů)
+2. [Manuální instalace](#manuální-instalace)
+3. [Konfigurace](#konfigurace)
+4. [První spuštění](#první-spuštění)
+5. [Produkční nasazení](#produkční-nasazení)
+6. [Řešení problémů](#řešení-problémů)
 
 ## 🔧 Požadavky
 
@@ -25,24 +24,6 @@
 - **RAM:** 4 GB+
 - **Disk:** SSD s 10 GB volného místa
 - **Síť:** Stabilní internetové připojení
-
-## 🚀 Rychlá instalace
-
-### Automatický instalační skript (Linux/macOS)
-
-```bash
-# Stažení a spuštění instalačního skriptu
-curl -fsSL https://raw.githubusercontent.com/your-username/fakturace-system/main/scripts/install.sh | bash
-
-# nebo pomocí wget
-wget -qO- https://raw.githubusercontent.com/your-username/fakturace-system/main/scripts/install.sh | bash
-```
-
-Skript automaticky:
-- Nainstaluje všechny závislosti
-- Vytvoří databázi
-- Nakonfiguruje aplikaci
-- Spustí systém
 
 ## 📝 Manuální instalace
 
@@ -120,22 +101,13 @@ SQLite nevyžaduje instalaci, Prisma jej vytvoří automaticky.
 ### 3. Klonování repozitáře
 
 ```bash
-# Klonování repozitáře
-git clone https://github.com/your-username/fakturace-system.git
-cd fakturace-system
-
-# nebo přes SSH
-git clone git@github.com:your-username/fakturace-system.git
-cd fakturace-system
+git clone <URL vašeho repozitáře>
+cd fakturace
 ```
 
 ### 4. Instalace závislostí
 
 ```bash
-# Instalace root závislostí
-npm install
-
-# Instalace backend závislostí
 cd backend
 npm install
 
@@ -166,7 +138,7 @@ DATABASE_URL="postgresql://fakturace_user:silne_heslo_zde@localhost:5432/faktura
 
 # Server
 NODE_ENV=development
-PORT=3002
+PORT=3029
 
 # JWT Secret (vygenerujte vlastní!)
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
@@ -196,13 +168,13 @@ SMTP_PASS=your-app-password
 # Stále v backend složce
 cd backend
 
-# Generování Prisma klienta
+# Generování Prisma klienta (volitelné – migrate jej spouští automaticky)
 npx prisma generate
 
 # Spuštění migrací
 npx prisma migrate deploy
 
-# Seed databáze (vytvoření výchozích dat)
+# Seed databáze (vytvoří admin účet, výchozí organizace...)
 npm run seed
 
 # Ověření databáze
@@ -231,16 +203,16 @@ CORS_ORIGIN=https://fakturace.vase-firma.cz
 ### Konfigurace portů
 
 Výchozí porty:
-- Backend: 3002
+- Backend: 3029
 - Frontend: 3030
 
 Změna portů:
 ```env
 # Backend
-PORT=3002
+PORT=3029
 
 # Frontend (v frontend/.env.local)
-NEXT_PUBLIC_API_URL=http://localhost:3002/api
+NEXT_PUBLIC_API_URL=http://localhost:3029/api
 ```
 
 ## 🏃 První spuštění
@@ -248,29 +220,27 @@ NEXT_PUBLIC_API_URL=http://localhost:3002/api
 ### Development režim
 
 ```bash
-# V kořenové složce projektu
-npm run dev
-
-# Nebo jednotlivě:
-# Terminal 1 - Backend
+# Terminal 1 – backend (http://localhost:3029)
 cd backend
 npm run dev
 
-# Terminal 2 - Frontend
-cd frontend
+# Terminal 2 – frontend (http://localhost:3030)
+cd ../frontend
 npm run dev
 ```
 
 ### Produkční build
 
 ```bash
-# Build frontend
+# Frontend production build + start
 cd frontend
 npm run build
-
-# Spuštění v produkci
-cd ..
 npm start
+
+# Backend production start (v jiném terminálu)
+cd ../backend
+npm run start
+# volitelné: pm2 start ecosystem.config.js
 ```
 
 ### Ověření instalace
@@ -299,6 +269,8 @@ pm2 startup
 # Monitorování
 pm2 monit
 ```
+
+> Poznámka: `ecosystem.config.js` spravuje tři procesy – backend API, Next.js frontend a nově také `fakturace-queues`, který spouští BullMQ workery. Ujistěte se, že před startem běží Redis.
 
 ### 2. Nginx Reverse Proxy
 
@@ -331,7 +303,7 @@ server {
 
     # Backend API
     location /api {
-        proxy_pass http://localhost:3002;
+        proxy_pass http://localhost:3029;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -342,12 +314,7 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # Uploaded files
-    location /uploads {
-        alias /home/user/fakturace-system/backend/uploads;
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-    }
+    # Soubory (PDF/ISDOC) se stahují přes backend endpoints, veřejná cesta /uploads již není potřeba
 
     # Bezpečnostní hlavičky
     add_header X-Frame-Options "SAMEORIGIN" always;
@@ -440,14 +407,14 @@ echo $DATABASE_URL
 #### 2. Port already in use
 ```bash
 # Najít proces na portu
-sudo lsof -i :3002
+sudo lsof -i :3029
 sudo lsof -i :3030
 
 # Ukončit proces
 kill -9 <PID>
 
 # Nebo změnit port v .env
-PORT=3002
+PORT=3029
 ```
 
 #### 3. Permission denied

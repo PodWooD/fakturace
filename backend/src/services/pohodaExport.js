@@ -1,5 +1,6 @@
 const { create } = require('xmlbuilder2');
 const iconv = require('iconv-lite');
+const storageService = require('./storageService');
 
 class PohodaExport {
   constructor() {
@@ -223,7 +224,7 @@ class PohodaExport {
         item.ele('inv:percentVAT').txt('21.0');
         
         const homeCurrency = item.ele('inv:homeCurrency');
-        const kmRate = parseFloat(organization.kmRate);
+        const kmRate = parseFloat(organization.kilometerRate);
         const totalPrice = totalKm * kmRate;
         
         homeCurrency.ele('typ:unitPrice').txt(kmRate.toFixed(2));
@@ -281,29 +282,21 @@ class PohodaExport {
     return `${year}-${month}-${day}`;
   }
 
-  savePohodaXML(invoice, workRecords, services, hardware, organization) {
+  async savePohodaXML(invoice, workRecords, services, hardware, organization) {
     try {
       const xmlBuffer = this.generateInvoiceXML(invoice, workRecords, services, hardware, organization);
       
-      // Vytvoř adresář pro XML pokud neexistuje
-      const fs = require('fs');
-      const path = require('path');
-      const xmlDir = path.join(__dirname, '../../uploads/xml');
-      
-      if (!fs.existsSync(xmlDir)) {
-        fs.mkdirSync(xmlDir, { recursive: true });
-      }
-
-      // Uložení souboru
-      const filename = `${invoice.invoiceNumber}.xml`;
-      const filepath = path.join(xmlDir, filename);
-      
-      fs.writeFileSync(filepath, xmlBuffer);
+      const stored = await storageService.saveFile({
+        buffer: xmlBuffer,
+        prefix: 'exports/pohoda',
+        extension: '.xml',
+        contentType: 'application/xml; charset=windows-1250',
+      });
 
       return {
-        filename,
-        path: `/uploads/xml/${filename}`,
-        size: xmlBuffer.length
+        filename: `${invoice.invoiceNumber}.xml`,
+        location: stored.location,
+        size: stored.size,
       };
     } catch (error) {
       throw new Error(`Chyba při ukládání Pohoda XML: ${error.message}`);

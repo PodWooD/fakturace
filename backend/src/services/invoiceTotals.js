@@ -1,73 +1,83 @@
+const { fromCents } = require('../utils/money');
+
 const DEFAULT_VAT_RATE = 0.21;
 
 const roundCurrency = (value) =>
   Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
-const toNumber = (value, fallback = 0) => {
-  const result = Number(value);
-  return Number.isFinite(result) ? result : fallback;
+const toInt = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
 };
 
 const calculateInvoiceTotals = (
-  organization,
+  organization = {},
   workRecords = [],
   services = [],
   hardware = [],
-  vatRate = DEFAULT_VAT_RATE
+  vatRate = DEFAULT_VAT_RATE,
 ) => {
-  const hourlyRate = toNumber(organization?.hourlyRate);
-  const kmRate = toNumber(organization?.kmRate);
+  const hourlyRateCents = organization.hourlyRateCents || 0;
+  const kilometerRateCents = organization.kilometerRateCents || 0;
 
-  const workAmountRaw = workRecords.reduce((sum, record) => {
-    const minutes = toNumber(record?.minutes);
-    return sum + (minutes / 60) * hourlyRate;
+  const workAmountCents = workRecords.reduce((sum, record) => {
+    const minutes = toInt(record?.minutes);
+    const hours = minutes / 60;
+    return sum + Math.round(hours * hourlyRateCents);
   }, 0);
 
-  const kmAmountRaw = workRecords.reduce((sum, record) => {
-    const kilometers = toNumber(record?.kilometers);
-    return sum + kilometers * kmRate;
+  const kmAmountCents = workRecords.reduce((sum, record) => {
+    const kilometers = toInt(record?.kilometers);
+    return sum + kilometers * kilometerRateCents;
   }, 0);
 
-  const servicesAmountRaw = services.reduce((sum, service) => {
+  const servicesAmountCents = services.reduce((sum, service) => {
     if (service?.isActive === false) {
       return sum;
     }
-    return sum + toNumber(service?.monthlyPrice);
+    return sum + (service?.monthlyPriceCents || 0);
   }, 0);
 
-  const hardwareAmountRaw = hardware.reduce((sum, item) => {
-    if (item?.totalPrice !== undefined && item?.totalPrice !== null) {
-      return sum + toNumber(item.totalPrice);
+  const hardwareAmountCents = hardware.reduce((sum, item) => {
+    if (item?.totalPriceCents) {
+      return sum + item.totalPriceCents;
     }
 
-    const quantity = toNumber(item?.quantity);
-    const unitPrice = toNumber(item?.unitPrice);
-    return sum + quantity * unitPrice;
+    const quantity = toInt(item?.quantity) || 1;
+    const unitPriceCents = item?.unitPriceCents || 0;
+    return sum + unitPriceCents * quantity;
   }, 0);
 
-  const workAmount = roundCurrency(workAmountRaw);
-  const kmAmount = roundCurrency(kmAmountRaw);
-  const servicesAmount = roundCurrency(servicesAmountRaw);
-  const hardwareAmount = roundCurrency(hardwareAmountRaw);
-  const totalAmount = roundCurrency(
-    workAmount + kmAmount + servicesAmount + hardwareAmount
-  );
-  const totalVat = roundCurrency(totalAmount * toNumber(vatRate, DEFAULT_VAT_RATE));
-  const totalWithVat = roundCurrency(totalAmount + totalVat);
+  const totalAmountCents =
+    workAmountCents + kmAmountCents + servicesAmountCents + hardwareAmountCents;
+
+  const effectiveVatRate = Number.isFinite(Number(vatRate))
+    ? Number(vatRate)
+    : DEFAULT_VAT_RATE;
+
+  const totalVatCents = Math.round(totalAmountCents * effectiveVatRate);
+  const totalWithVatCents = totalAmountCents + totalVatCents;
 
   return {
-    workAmount,
-    kmAmount,
-    servicesAmount,
-    hardwareAmount,
-    totalAmount,
-    totalVat,
-    totalWithVat
+    workAmountCents,
+    workAmount: fromCents(workAmountCents),
+    kmAmountCents,
+    kmAmount: fromCents(kmAmountCents),
+    servicesAmountCents,
+    servicesAmount: fromCents(servicesAmountCents),
+    hardwareAmountCents,
+    hardwareAmount: fromCents(hardwareAmountCents),
+    totalAmountCents,
+    totalAmount: fromCents(totalAmountCents),
+    totalVatCents,
+    totalVat: fromCents(totalVatCents),
+    totalWithVatCents,
+    totalWithVat: fromCents(totalWithVatCents),
   };
 };
 
 module.exports = {
   DEFAULT_VAT_RATE,
   roundCurrency,
-  calculateInvoiceTotals
+  calculateInvoiceTotals,
 };

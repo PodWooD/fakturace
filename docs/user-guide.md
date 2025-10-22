@@ -50,16 +50,10 @@ Dashboard je hlavní obrazovka systému, která poskytuje rychlý přehled.
 ### Statistické karty
 ![Dashboard Stats](dashboard-stats.png)
 
-- **Aktivní organizace** - Počet organizací v systému
-- **Pracovní záznamy** - Celkový počet záznamů za měsíc
-- **Vygenerované faktury** - Počet faktur za měsíc
-- **Celková částka** - Součet všech faktur
-
-### Rychlé akce
-- **Import výkazů** - Nahrání Excel souboru s daty
-- **Generovat faktury** - Hromadné generování faktur
-- **Export do Pohody** - Export faktur do XML
-- **Měsíční report** - Přehled za měsíc
+- **Aktivní organizace** – Kolik organizací má v aktuálně vybraném období data.
+- **Zbývá vyfakturovat** – Počet organizací, které ještě nemají připravenou fakturu.
+- **Předpokládaná fakturace** – Součet částek za práci a výjezdy za zvolené období.
+- **Odpracované hodiny** – Celkový počet hodin techniků za daný měsíc.
 
 ### Tabulka organizací
 Zobrazuje přehled všech organizací s:
@@ -207,6 +201,18 @@ Systém očekává Excel soubor s následující strukturou:
    - Změnit ceny
    - Přidat poznámku
 3. Klikněte **"Uložit a přegenerovat PDF"**
+
+## 🧾 Přijaté faktury
+
+1. V menu vyberte **"Přijaté faktury"**
+2. Horní přehled zobrazuje všechny importované faktury se stavem `PENDING`, `READY` nebo `ARCHIVED`
+3. Po kliknutí na fakturu se v detailu zobrazí:
+   - Kontrolní součet položek vs. celková částka faktury (zvýrazní případný rozdíl)
+   - Položky rozdělené na jednotlivé kusy (množství = 1) s případnými slevami pod danou položkou
+   - Tlačítka pro znovuspuštění OCR, schválení nebo archivaci
+4. Řádky lze upravovat přímo v tabulce a uložit tlačítkem **"Uložit položky"**
+5. Tlačítko **"Náhled faktury"** otevře originální soubor nahraný pro OCR (pokud je dostupný)
+6. Schválení faktury změní stav na `READY` a označí položky jako `APPROVED`
 
 ## 🔄 Export do Pohody
 

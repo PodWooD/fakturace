@@ -26,21 +26,21 @@
 
 ### 1. Test přihlášení
 - **Status:** ✅ ÚSPĚŠNÝ
-- **URL:** http://localhost:3003
+- **URL:** http://localhost:3030
 - **Uživatel:** admin@fakturace.cz
 - **Výsledek:** Úspěšné přesměrování na /dashboard
 - **Screenshot:** `01-login-page.png`, `02-login-filled.png`, `03-after-login.png`
 
 ### 2. Test Dashboard
 - **Status:** ✅ ÚSPĚŠNÝ
-- **URL:** http://localhost:3003/dashboard
+- **URL:** http://localhost:3030/dashboard
 - **Funkce:**
   - Statistické karty zobrazují správné hodnoty
     - Aktivní organizace: 1
     - Zbývá vyfakturovat: 0
     - Tento měsíc: 16 437,5 Kč
     - Odpracováno: 25.25 h
-  - Rychlé akce (4 tlačítka) - Import, Vygenerovat, Export, Report
+  - Panel rychlých akcí byl odstraněn – test neprobíhá (funkcionalita nahrazena navigací)
   - Upozornění sekce s informacemi
   - Měsíční přehled organizací v tabulce
   - Roční statistiky 2025
@@ -48,7 +48,7 @@
 
 ### 3. Test Organizací
 - **Status:** ✅ ČÁSTEČNÝ ÚSPĚCH
-- **URL:** http://localhost:3003/organizations
+- **URL:** http://localhost:3030/organizations
 - **Výsledek:**
   - Zobrazení seznamu: ✅ Funguje (4 organizace)
   - CRUD operace: ⏸️ Nedotestováno (problém s Puppeteer selektory)
@@ -105,8 +105,8 @@ Vygenerováno 6 screenshotů v `./test-screenshots/`:
 ## 🔧 Technické detaily
 
 ### Aplikační porty:
-- **Frontend:** http://localhost:3003 (Next.js)
-- **Backend API:** http://localhost:3002 (Express)
+- **Frontend:** http://localhost:3030 (Next.js)
+- **Backend API:** http://localhost:3029 (Express)
 - **Backend redirect:** http://localhost:3001 (→ dashboard)
 
 ### Testovací konfigurace:

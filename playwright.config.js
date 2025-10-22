@@ -36,7 +36,7 @@ module.exports = defineConfig({
   // Web server (if needed - uncomment if you want Playwright to start your services)
   // webServer: {
   //   command: 'npm run dev',
-  //   port: 3003,
+  //   port: 3030,
   //   timeout: 120000,
   //   reuseExistingServer: true,
   // },

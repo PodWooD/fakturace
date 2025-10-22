@@ -1,60 +1,66 @@
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient, UserRole } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
+const path = require('path');
+
+const { toCents } = require(path.join(__dirname, '../src/utils/money'));
 
 const prisma = new PrismaClient();
 
 async function main() {
-  // Vytvoření admin uživatele
   const hashedPassword = await bcrypt.hash('admin123', 10);
-  
+
   await prisma.user.create({
     data: {
       email: 'admin@fakturace.cz',
       password: hashedPassword,
       name: 'Administrator',
-      role: 'ADMIN'
-    }
+      role: UserRole.ADMIN,
+    },
   });
 
-  // Vytvoření ukázkových organizací
   const organizations = [
     {
       name: 'Lázně Toušeň',
       code: 'LT',
       contactPerson: 'L. Valehrach',
-      hourlyRate: 550,
-      kmRate: 10,
-      email: 'info@laznetousen.cz'
+      hourlyRateCents: toCents(550),
+      kilometerRateCents: toCents(10),
+      email: 'info@laznetousen.cz',
     },
     {
       name: 'Oresi CZ',
       code: 'O',
       contactPerson: 'Jan Novák',
-      hourlyRate: 650,
-      kmRate: 12,
-      email: 'info@oresi.cz'
+      hourlyRateCents: toCents(650),
+      kilometerRateCents: toCents(12),
+      email: 'info@oresi.cz',
     },
     {
       name: 'Oresi SK',
       code: 'OSK',
       contactPerson: 'Peter Kováč',
-      hourlyRate: 500,
-      kmRate: 10,
-      email: 'info@oresi.sk'
+      hourlyRateCents: toCents(500),
+      kilometerRateCents: toCents(10),
+      email: 'info@oresi.sk',
     },
     {
       name: 'TVM NET GROUP',
       code: 'TVMNET',
       contactPerson: 'Tomáš Veselý',
-      hourlyRate: 600,
-      kmRate: 11,
-      email: 'info@tvmnet.cz'
-    }
+      hourlyRateCents: toCents(600),
+      kilometerRateCents: toCents(11),
+      email: 'info@tvmnet.cz',
+    },
   ];
 
   for (const org of organizations) {
     await prisma.organization.create({
-      data: org
+      data: {
+        ...org,
+        hardwareMarginPct: 10,
+        softwareMarginPct: 12,
+        outsourcingFeeCents: toCents(1500),
+      },
     });
   }
 

@@ -23,6 +23,8 @@
 - `POST /api/received-invoices/upload`  
   - Vstup: soubor (PDF/image), volitelně dodavatel/datum (pokud uživatel zadá ručně).  
   - Akce: upload → zavolá Mistral OCR → uloží `ReceivedInvoice` + položky `ReceivedInvoiceItem` (stav `PENDING`).  
+  - Backend automaticky rozseká položky na **jednotky o množství 1** (např. 5× monitor → pět samostatných řádků).  
+  - Slevové položky (řádky se zápornou cenou) se párují k odpovídajícím produktům podle identifikátoru/sufixu a v UI se zobrazují ve skupinách.  
   - Odpověď: náhled položek, odkaz na editaci.
 
 ### Editace přijaté faktury
@@ -46,13 +48,13 @@
 ## Frontend workflow
 
 1. Záložka **Import dat** – sekce „Import faktury“ (drag & drop). Po nahrání zobrazí OCR návrat, umožní poslat na editaci.  
-2. Záložka **Faktury přijaté** – přehled všech faktur ve stavu `PENDING`/`READY`. Možnost ručně upravit řádky, přidat chybějící, označit za schválené nebo odmítnout.  
+2. Záložka **Faktury přijaté** – přehled všech faktur ve stavu `PENDING`/`READY`. Detail faktury zobrazuje kontrolní součet položek vs. celkovou částku faktury a zvýrazní případný rozdíl. Slevové řádky jsou automaticky seskupeny pod příslušnými položkami, k dispozici je tlačítko **Náhled faktury** pro stažení originálního souboru a akce pro schválení/archivaci. Uživatel může řádky upravit, doplnit nebo fakturu schválit/odmítnout.  
 3. Záložka **Hardware** – zobrazuje `APPROVED` položky, které ještě nebyly přiřazeny. Uživatel vybere organizaci, období, případně poznámku → stav `ASSIGNED`.  
 4. Záložka **Fakturace** – modální výběr položek s `status = ASSIGNED` pro danou organizaci. Při uložení draftu se položky označí jako `INVOICED`.
 
 ## Validace a audit
 
-- Po importu ověřit: součet položek ≈ celková částka faktury (tolerance ±1 Kč kvůli zaokrouhlení).  
+- Po importu systém vizuálně kontroluje součet položek a porovnává jej s celkovou částkou faktury (tolerance ±1 Kč kvůli zaokrouhlení).  
 - Logovat kdo co upravil (timestamp + uživatel).  
 - Uchovat originální soubor + OCR JSON kvůli traceability.  
 - Možnost znovu importovat fakturu (např. při opravě OCR) – starou verzi archivovat.

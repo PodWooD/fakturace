@@ -3,106 +3,186 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  ADMIN
+  ACCOUNTANT
+  TECHNICIAN
+  VIEWER
+}
+
+enum WorkRecordStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  CANCELLED
+}
+
+enum ReceivedInvoiceStatus {
+  PENDING
+  READY
+  PROCESSED
+  ARCHIVED
+}
+
+enum ReceivedInvoiceItemStatus {
+  PENDING
+  APPROVED
+  ASSIGNED
+  REJECTED
+}
+
+enum HardwareStatus {
+  NEW
+  ASSIGNED
+  INVOICED
+}
+
+enum Currency {
+  CZK
+  EUR
+  USD
+}
+
+enum RoundingMode {
+  HALF_UP
+  BANKERS
+}
+
+enum NotificationLevel {
+  INFO
+  WARNING
+  ERROR
+}
+
+enum NotificationType {
+  OCR_FAILURE
+  OCR_RETRY
+  OCR_SUCCESS
+}
+
 model Organization {
-  id            Int           @id @default(autoincrement())
-  name          String
-  code          String?       @unique
-  contactPerson String?
-  hourlyRate    Decimal       
-  kmRate        Decimal       
-  address       String?
-  ico           String?
-  dic           String?
-  email         String?
-  phone         String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  createdBy     Int?
-  
-  services      Service[]
-  workRecords   WorkRecord[]  @relation("WorkRecordOrganization")
-  billedRecords WorkRecord[]  @relation("WorkRecordBillingOrg")
-  hardware      Hardware[]
-  invoices      Invoice[]
-  billingDrafts BillingDraft[]
+  id                   Int                     @id @default(autoincrement())
+  name                 String
+  code                 String?                 @unique
+  contactPerson        String?
+  address              String?
+  ico                  String?
+  dic                  String?
+  email                String?
+  phone                String?
+  hourlyRateCents      Int                     @default(0)
+  kilometerRateCents   Int                     @default(0)
+  hardwareMarginPct    Int                     @default(0)
+  softwareMarginPct    Int                     @default(0)
+  outsourcingFeeCents  Int                     @default(0)
+  isActive             Boolean                 @default(true)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  createdBy            Int?
+
+  services             Service[]
+  workRecords          WorkRecord[]            @relation("WorkRecordOrganization")
+  billedRecords        WorkRecord[]            @relation("WorkRecordBillingOrg")
+  hardware             Hardware[]
+  invoices             Invoice[]
+  billingDrafts        BillingDraft[]
   receivedInvoiceItems ReceivedInvoiceItem[]
 }
 
 model Service {
-  id             Int          @id @default(autoincrement())
-  organizationId Int
-  serviceName    String
-  description    String?
-  monthlyPrice   Decimal      
-  isActive       Boolean      @default(true)
-  
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  id                  Int           @id @default(autoincrement())
+  organizationId      Int
+  serviceName         String
+  description         String?
+  monthlyPriceCents   Int           @default(0)
+  isActive            Boolean       @default(true)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  organization        Organization  @relation(fields: [organizationId], references: [id])
 }
 
 model WorkRecord {
-  id             Int          @id @default(autoincrement())
+  id             Int                @id @default(autoincrement())
   organizationId Int
+  billingOrgId   Int?
+  userId         Int?
   date           DateTime
-  worker         String
+  worker         String?
   description    String
-  minutes        Int          @default(0)
-  timeFrom       String?      // Čas začátku práce (HH:MM)
-  timeTo         String?      // Čas konce práce (HH:MM)
-  branch         String?      // Pobočka organizace
-  kilometers     Int          @default(0)
-  month          Int?
-  year           Int?
-  price          Decimal?
-  projectCode    String?      // Kód zakázky (např. "O - Oresi", "DOH - Oresi - Dohnal")
-  billingOrgId   Int?         // ID organizace pro fakturaci (pokud se liší od organizationId)
-  createdAt      DateTime     @default(now())
+  minutes        Int                @default(0)
+  timeFrom       String?
+  timeTo         String?
+  branch         String?
+  kilometers     Int                @default(0)
+  status         WorkRecordStatus   @default(DRAFT)
+  month          Int
+  year           Int
+  projectCode    String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
   createdBy      Int?
 
-  organization   Organization @relation(fields: [organizationId], references: [id], name: "WorkRecordOrganization")
-  billingOrg     Organization? @relation(fields: [billingOrgId], references: [id], name: "WorkRecordBillingOrg")
+  organization   Organization       @relation(fields: [organizationId], references: [id], name: "WorkRecordOrganization")
+  billingOrg     Organization?      @relation(fields: [billingOrgId], references: [id], name: "WorkRecordBillingOrg")
+  user           User?              @relation(fields: [userId], references: [id])
 
   @@index([month, year])
   @@index([projectCode])
 }
 
 model Hardware {
-  id                   Int          @id @default(autoincrement())
-  organizationId       Int
-  itemName             String
-  description          String?
-  quantity             Int
-  unitPrice            Decimal      
-  totalPrice           Decimal      
-  month                Int
-  year                 Int
-  status               String       @default("NEW")
-  sourceInvoiceItemId  Int?         @unique
-  assignedAt           DateTime?
-  
-  organization         Organization @relation(fields: [organizationId], references: [id])
-  invoiceItem          ReceivedInvoiceItem? @relation("HardwareInvoiceItem", fields: [sourceInvoiceItemId], references: [id])
+  id                     Int                 @id @default(autoincrement())
+  organizationId         Int
+  itemName               String
+  description            String?
+  quantity               Int                 @default(1)
+  unitPriceCents         Int
+  totalPriceCents        Int
+  vatRate                Int                 @default(0)
+  status                 HardwareStatus      @default(NEW)
+  month                  Int?
+  year                   Int?
+  assignedAt             DateTime?
+  sourceInvoiceItemId    Int?                @unique
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  organization           Organization        @relation(fields: [organizationId], references: [id])
+  sourceInvoiceItem      ReceivedInvoiceItem? @relation("InvoiceItemHardware", fields: [sourceInvoiceItemId], references: [id])
 }
 
 model Invoice {
-  id             Int          @id @default(autoincrement())
-  organizationId Int
-  invoiceNumber  String       @unique
-  month          Int
-  year           Int
-  totalAmount    Decimal      
-  totalVat       Decimal      
-  status         String @default("DRAFT")
-  generatedAt    DateTime     @default(now())
-  pdfUrl         String?
-  pohodaXml      String?
-  notes          String?
-  
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  
+  id                Int            @id @default(autoincrement())
+  organizationId    Int
+  invoiceNumber     String         @unique
+  month             Int
+  year              Int
+  totalAmountCents  Int            @default(0)
+  totalVatCents     Int            @default(0)
+  currency          Currency       @default(CZK)
+  status            InvoiceStatus  @default(DRAFT)
+  roundingMode      RoundingMode?
+  generatedAt       DateTime?
+  pdfUrl            String?
+  pohodaXml         String?
+  isdocUrl          String?
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  organization      Organization   @relation(fields: [organizationId], references: [id])
+
   @@index([month, year])
 }
 
@@ -111,62 +191,109 @@ model BillingDraft {
   organizationId Int
   month          Int
   year           Int
-  data           String
+  data           Json
+  roundingMode   RoundingMode?
   updatedBy      Int?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  organization   Organization @relation(fields: [organizationId], references: [id])
+  organization   Organization  @relation(fields: [organizationId], references: [id])
 
   @@unique([organizationId, month, year])
 }
 
 model ReceivedInvoice {
-  id              Int       @id @default(autoincrement())
-  supplierName    String
-  supplierIco     String?
-  invoiceNumber   String
-  issueDate       DateTime?
-  totalWithoutVat Decimal?
-  totalWithVat    Decimal?
-  currency        String    @default("CZK")
-  status          String    @default("PENDING")
-  sourceFilePath  String?
-  ocrPayload      String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  createdBy       Int?
+  id                   Int                   @id @default(autoincrement())
+  supplierName         String
+  supplierIco          String?
+  invoiceNumber        String
+  issueDate            DateTime?
+  totalWithoutVatCents Int?
+  totalWithVatCents    Int?
+  currency             Currency              @default(CZK)
+  digest               String                @unique
+  status               ReceivedInvoiceStatus @default(PENDING)
+  sourceFilePath       String?
+  ocrPayload           Json?
+  ocrStatus            String?               @default("SUCCESS")
+  ocrError             String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  createdBy            Int?
 
-  items ReceivedInvoiceItem[]
+  items                ReceivedInvoiceItem[]
 }
 
 model ReceivedInvoiceItem {
-  id                     Int       @id @default(autoincrement())
+  id                     Int                        @id @default(autoincrement())
   invoiceId              Int
   itemName               String
   description            String?
-  quantity               Decimal?
-  unitPrice              Decimal?
-  totalPrice             Decimal?
-  vatRate                Decimal?
-  status                 String    @default("PENDING")
+  productCode            String?
+  referenceProductCode   String?
+  quantity               Decimal?                   @db.Decimal(18, 4)
+  unitPriceCents         Int
+  totalPriceCents        Int
+  vatRate                Int                        @default(0)
+  status                 ReceivedInvoiceItemStatus  @default(PENDING)
   assignedOrganizationId Int?
   assignedMonth          Int?
   assignedYear           Int?
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
 
-  invoice                ReceivedInvoice @relation(fields: [invoiceId], references: [id])
-  assignedOrganization   Organization?   @relation(fields: [assignedOrganizationId], references: [id])
-  hardware               Hardware?       @relation("HardwareInvoiceItem")
+  invoice                ReceivedInvoice            @relation(fields: [invoiceId], references: [id])
+  assignedOrganization   Organization?              @relation(fields: [assignedOrganizationId], references: [id])
+  hardware               Hardware?                  @relation("InvoiceItemHardware")
+}
+
+model AccountingPeriod {
+  id        Int      @id @default(autoincrement())
+  year      Int
+  month     Int
+  lockedAt  DateTime?
+  lockedBy  Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([year, month])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  actorId   Int?
+  entity    String
+  entityId  Int
+  action    String
+  diffJson  Json
+  createdAt DateTime @default(now())
+
+  actor     User?    @relation(fields: [actorId], references: [id])
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
   password  String
   name      String
-  role      String @default("USER")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  role      UserRole  @default(VIEWER)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  workRecords WorkRecord[]
+  auditLogs   AuditLog[]
+  notifications Notification[]
+}
+
+model Notification {
+  id        Int               @id @default(autoincrement())
+  type      NotificationType
+  level     NotificationLevel @default(INFO)
+  message   String
+  metadata  Json?
+  userId    Int?
+  readAt    DateTime?
+  createdAt DateTime          @default(now())
+
+  user      User?             @relation(fields: [userId], references: [id])
 }

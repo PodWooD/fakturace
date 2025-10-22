@@ -78,7 +78,7 @@ cd ../backend
 if [ ! -f .env ]; then
     cat > .env << 'EOL'
 NODE_ENV=production
-PORT=3002
+PORT=3029
 DATABASE_URL="postgresql://fakturace_user:fakturace2025@localhost:5432/fakturace_db"
 JWT_SECRET=super-secret-jwt-key-please-change-this
 CORS_ORIGIN=http://YOUR_SERVER_IP:3030
@@ -141,7 +141,7 @@ echo "=== ✅ INSTALACE DOKONČENA ==="
 echo ""
 echo "Aplikace běží na:"
 echo "  Frontend: http://YOUR_SERVER_IP:3030"
-echo "  Backend API: http://localhost:3002"
+echo "  Backend API: http://localhost:3029"
 echo ""
 echo "Přihlašovací údaje:"
 echo "  Email: admin@firma.cz"
@@ -154,5 +154,5 @@ echo "  pm2 restart all - restartovat vše"
 echo ""
 echo "⚠️  NEZAPOMEŇTE:"
 echo "1. Upravit backend/.env soubor (CORS_ORIGIN na vaši IP)"
-echo "2. Otevřít porty 3030 a 3002 ve firewallu"
+echo "2. Otevřít porty 3030 a 3029 ve firewallu"
 echo "3. Změnit výchozí hesla"

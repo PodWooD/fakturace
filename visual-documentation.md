@@ -245,9 +245,9 @@ th {
 
 ### Komponenty dashboardu
 
-1. **Statistické karty** - 4 karty v gridu
-2. **Rychlé akce** - 4 hlavní tlačítka
-3. **Tabulka organizací** - přehled všech organizací
+1. **Statistické karty** – 4 karty v gridu
+2. **Tabulka organizací** – přehled všech organizací
+3. **Upozornění + OCR přehled** – varování a stav přijatých faktur
 
 ---
 

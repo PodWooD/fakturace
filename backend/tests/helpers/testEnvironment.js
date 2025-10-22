@@ -1,30 +1,32 @@
-const path = require('path');
-const fs = require('fs');
 const { execSync } = require('child_process');
+const crypto = require('crypto');
+const path = require('path');
 const supertest = require('supertest');
 const bcrypt = require('bcryptjs');
 const { PrismaClient } = require('@prisma/client');
 
 async function setupTestEnvironment(suiteName) {
-  const tmpRoot = path.join(__dirname, '../tmp');
-  const suiteDir = path.join(tmpRoot, suiteName);
-  fs.mkdirSync(suiteDir, { recursive: true });
+  const dbName = `test_${suiteName}_${crypto.randomBytes(4).toString('hex')}`;
+  const adminConnection = new URL(process.env.TEST_DATABASE_URL || 'postgresql://fakturace:fakturace@localhost:5433/fakturace');
+  const adminUrl = adminConnection.toString();
 
-  const dbPath = path.join(suiteDir, 'test.db');
-  const dbUrl = `file:${dbPath}`;
+  const createDatabase = `CREATE DATABASE "${dbName}";`;
+  const dropDatabase = `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`;
+  execSync(`psql "${adminUrl}" -c "${dropDatabase}"`);
+  execSync(`psql "${adminUrl}" -c "${createDatabase}"`);
+
+  const testConnection = new URL(adminUrl);
+  testConnection.pathname = `/${dbName}`;
+  const testDbUrl = testConnection.toString();
 
   process.env.NODE_ENV = 'test';
   process.env.JWT_SECRET = 'test-secret';
   process.env.CORS_ORIGIN = 'http://localhost:3030';
-  process.env.DATABASE_URL = dbUrl;
+  process.env.DATABASE_URL = testDbUrl;
 
-  if (fs.existsSync(dbPath)) {
-    fs.unlinkSync(dbPath);
-  }
-
-  execSync('npx prisma db push --skip-generate', {
+  execSync('npx prisma migrate deploy', {
     cwd: path.join(__dirname, '../..'),
-    env: { ...process.env, DATABASE_URL: dbUrl },
+    env: { ...process.env, DATABASE_URL: testDbUrl },
     stdio: 'ignore'
   });
 
@@ -36,8 +38,8 @@ async function setupTestEnvironment(suiteName) {
       email: 'admin@fakturace.cz',
       password: hashedPassword,
       name: 'Administrator',
-      role: 'ADMIN'
-    }
+      role: 'ADMIN',
+    },
   });
 
   // Načti aplikaci až po nastavení env proměnných
@@ -47,12 +49,7 @@ async function setupTestEnvironment(suiteName) {
 
   const cleanup = async () => {
     await prisma.$disconnect();
-    if (fs.existsSync(dbPath)) {
-      fs.unlinkSync(dbPath);
-    }
-    if (fs.existsSync(suiteDir)) {
-      fs.rmSync(suiteDir, { recursive: true, force: true });
-    }
+    execSync(`psql "${adminUrl}" -c "DROP DATABASE IF EXISTS \"${dbName}\" WITH (FORCE);"`);
   };
 
   return { prisma, request, cleanup };

@@ -1,239 +1,116 @@
-# Fakturační Systém
+# Fakturace v1.0
 
-Automatizovaný systém pro správu a fakturaci IT služeb s importem dat z Excel výkazů, generováním PDF faktur a exportem do účetního systému Pohoda.
+Moderní platforma pro zpracování přijatých faktur, evidenci práce techniků a generování podkladů pro fakturaci. Implementace odpovídá specifikaci v `docs/fakturace_v1.0_en.md` a staví na otevřeném technologickém stacku.
 
-## 🚀 Rychlý start
+## Architektura
 
-```bash
-# Klonování repozitáře
-git clone https://github.com/PodWooD/fakturace-system.git
-cd fakturace-system
+- **Backend** – Node.js + Express + Prisma ORM nad PostgreSQL. Moduly pro organizace, výkazy, přijaté faktury (OCR, automatické rozsekání položek, slevy s `referenceProductCode`), hardware, fakturaci a auditní logy. Částky ukládáme v integer centech.
+- **Frontend** – Next.js 14 (App Router), Mantine 7, TanStack Query. React komponenty pokrývají dashboard, organizace, výkazy, přijaté faktury (včetně náhledu originálu), hardware a billing nástroje.
+- **Obsluha účtování** – Accounting lock API (zamykání období) a audit logger propisující změny do tabulky `AuditLog`.
+- **Soubory** – Originální faktury, PDF a Pohoda XML jdou přes `storageService` do MinIO; pokud není nastaveno, použije se lokální `backend/uploads`.
+- **Fronty** – BullMQ + Redis zpracovává OCR reprocessing, PDF a Pohoda exporty. Pokud Redis neběží, backend přepne do inline módu.
 
-# Instalace závislostí
-npm install
-cd backend && npm install
-cd ../frontend && npm install
-
-# Nastavení databáze
-cd ../backend
-cp .env.example .env
-# Upravte .env soubor s vašimi údaji
-
-# Migrace databáze
-npx prisma migrate deploy
-npx prisma db seed
-
-# Spuštění aplikace
-cd ..
-./start.sh
-
-# Aplikace běží na:
-# Frontend: http://localhost:3030
-# Backend API: http://localhost:3002
-```
-
-**Výchozí přihlašovací údaje:**
-- Email: admin@fakturace.cz
-- Heslo: admin123
-
-## ✨ Hlavní funkce
-
-- 📊 **Import dat z Excel** - Automatický import pracovních výkazů
-- 🏢 **Správa organizací** - Individuální cenové podmínky pro každého klienta
-- ✏️ **Online editace** - Úprava všech dat přímo v aplikaci
-- 🧮 **Automatické výpočty** - Hodiny × sazba + km × sazba/km
-- 📄 **Generování PDF faktur** - Profesionální faktury s vaším logem
-- 🔄 **Export do Pohody** - XML formát kompatibilní s Pohoda 2.0
-- 💼 **Paušální služby** - Správa pravidelných měsíčních služeb
-- 🖥️ **Evidence hardware** - Fakturace prodaného hardware
-- 🧾 **Import přijatých faktur (OCR)** - Mistral OCR rozpozná položky, které se dají schválit a přiřadit
-- 📥 **Hromadný import** - Excel výkazy i PDF faktury lze nahrát po více souborech s průběhem nahrávání
-- 📱 **Responzivní design** - Plně funkční na mobilech, tabletech i desktop
-- 💶 **Návrhy fakturace** - Nová záložka pro editaci všech položek před generováním faktury
-
-## 📋 Požadavky
+## Požadavky
 
 - Node.js 18+
-- PostgreSQL 14+ (nebo SQLite pro development)
-- npm nebo yarn
+- NPM 9+
+- PostgreSQL 15+ (lokálně lze použít Docker)
 
-## 🛠️ Technologie
+## Lokální spuštění
 
-**Backend:**
-- Node.js + Express.js
-- Prisma ORM
-- JWT autentizace
-- PDFKit pro generování PDF
-- XMLBuilder2 pro Pohoda export
-
-**Frontend:**
-- Next.js 14
-- TypeScript
-- Tailwind CSS (včetně responzivního designu)
-- TanStack Query & Table
-
-## 📱 Responzivní design
-
-Aplikace je **plně optimalizována pro všechna zařízení**:
-
-**📱 Mobilní zařízení (< 768px):**
-- Hamburger menu pro intuitivní navigaci
-- Touch-optimalizované tlačítka (min 44px)
-- Responzivní tabulky s horizontal scrollem
-- 1-column layout pro lepší čitelnost
-- Optimalizované fonty a spacing
-
-**📲 Tablety (768px - 1024px):**
-- 2-column grid layout
-- Plná navigace nebo hamburger menu dle velikosti
-- Touch-friendly rozhraní
-
-**🖥️ Desktop (> 1024px):**
-- Plná horizontální navigace
-- Multi-column layouts
-- Optimalizované pro myš a klávesnici
-
-**Testování:**
-```bash
-# Chrome DevTools Device Mode
-F12 → Ctrl+Shift+M → Vyber mobilní zařízení
-```
-
-## 📁 Struktura projektu
-
-```
-fakturace-system/
-├── backend/           # Express.js API server
-├── frontend/          # Next.js aplikace
-├── scripts/           # Pomocné skripty
-├── docs/              # Dokumentace
-└── database/          # Databázové skripty
-```
-
-## 🔧 Konfigurace
-
-Vytvořte `.env` soubor v `backend/` složce:
-
-```env
-# Databáze
-DATABASE_URL="postgresql://user:password@localhost:5432/fakturace_db"
-
-# Pro SQLite (development):
-# DATABASE_URL="file:./dev.db"
-
-# Server
-PORT=3002
-NODE_ENV=production
-
-# JWT
-JWT_SECRET=your-super-secret-jwt-key
-
-# CORS
-CORS_ORIGIN=http://localhost:3030
-
-# OCR (Mistral)
-MISTRAL_OCR_API_KEY="your-mistral-api-key"
-MISTRAL_OCR_URL="https://api.mistral.ai/v1/ocr"
-MISTRAL_OCR_LANGUAGE="cs"
-
-# Firemní údaje
-COMPANY_NAME="Vaše firma s.r.o."
-COMPANY_ICO="12345678"
-COMPANY_DIC="CZ12345678"
-COMPANY_ADDRESS="Ulice 123, 12345 Město"
-COMPANY_PHONE="+420 123 456 789"
-COMPANY_EMAIL="info@vase-firma.cz"
-COMPANY_BANK_ACCOUNT="1234567890/0100"
-```
-
-Pro frontend vytvořte `.env.local` podle šablony `.env.local.example`:
-
-```env
-NEXT_PUBLIC_API_URL=http://localhost:3002
-```
-
-## 📚 Dokumentace
-
-- [Kompletní dokumentace](./docs/dokumentace.md)
-- [API dokumentace](./docs/api-documentation.md)
-- [Instalační příručka](./docs/installation-guide.md)
-- [Uživatelská příručka](./docs/user-guide.md)
-- [Vizuální dokumentace](./docs/visual-documentation.md)
-
-## 📥 Import dat v aplikaci
-
-- **Excel výkazy** – na stránce Import dat můžete nahrát více souborů `.xlsx/.xls`. Pro každý soubor vidíte průběh nahrávání, stav a zprávu z backendu. Měsíc/rok se nastavují globálně před spuštěním importu.
-- **Přijaté faktury (PDF)** – do téže stránky jde přidat libovolný počet faktur. Backend je odešle do OCR Mistral (viz `.env`), položky se zobrazí v záložkách „Faktury přijaté“ (ruční kontrola) a „Hardware“ (přiřazení organizaci). Z fakturace se potom dají natáhnout přímo do draftu.
-- Importy běží postupně a zobrazený progress bar odpovídá skutečnému uploadu souboru.
-
-## ✅ CI/CD
-
-Repo obsahuje GitHub Actions workflow (`.github/workflows/test.yml`), které na každém pushi/pull requestu:
-- nainstaluje závislosti
-- spustí backend testy přes `npm test`
-- spustí Playwright E2E testy
-
-## 🔐 Bezpečnostní poznámka
-
-Knihovna `xlsx` (SheetJS) má aktuálně hlášenou zranitelnost (prototype pollution, ReDoS) bez dostupné opravy. V případě nasazení do produkčního prostředí doporučujeme sledovat vydání opravované verze nebo zvážit nasazení mitigací (sandboxování importu, omezení přístupu, validace souborů).
-
-## 🚀 Deployment
-
-### PM2 (doporučeno)
+### Backend
 
 ```bash
-# Instalace PM2
-npm install -g pm2
+cd backend
+npm install
+cp .env.example .env               # upravte DATABASE_URL / MinIO / Redis podle potřeby
 
-# Spuštění aplikace
-pm2 start ecosystem.config.js
+npx prisma migrate deploy          # aplikuje schéma
+npm run seed                       # vytvoří výchozí data (admin, organizace, ceníky)
 
-# Nastavení automatického startu
-pm2 save
-pm2 startup
+npm run dev                        # http://localhost:3029 (Express + Prisma)
+
+# volitelné: worker pro fronty (OCR, PDF, Pohoda) – vyžaduje běžící Redis
+npm run worker
 ```
 
-### Docker
+> TIP: `docker-compose.yml` v kořeni spustí PostgreSQL, Redis a MinIO (`docker compose up -d`). Přihlašovací údaje odpovídají hodnotám z `.env.example`.
+
+#### Konfigurace úložiště (MinIO / S3)
+
+Backend automaticky ukládá originální soubory faktur, PDF exporty a Pohoda XML přes MinIO klienta. Pro lokální vývoj stačí spustit MinIO z `docker-compose.yml` a doplnit do `.env` tyto hodnoty (viz `backend/.env.example`):
+
+```
+MINIO_ENDPOINT=localhost
+MINIO_PORT=9000
+MINIO_ACCESS_KEY=fakturace
+MINIO_SECRET_KEY=fakturace123
+MINIO_BUCKET=fakturace-files
+MINIO_USE_SSL=false
+```
+
+Pokud necháte proměnné prázdné, systém spadne do fallback režimu a ukládá soubory do `backend/uploads`, takže není nutné MinIO zapojovat hned. Doporučený produkční provoz však spoléhá na objektové úložiště.
+
+Po doplnění proměnných můžete existující soubory přesunout z lokálního adresáře do MinIO příkazem:
 
 ```bash
-# Build a spuštění
-docker-compose up -d
+cd backend
+npm run migrate:uploads
 ```
 
-## 📊 Import dat z Excelu
+Skript je idempotentní – přeskočí položky, které už míří na `s3://…` a v případě nenastaveného MinIO pouze vypíše upozornění.
 
-Systém očekává Excel soubor s následující strukturou:
+#### Redis fronty (BullMQ)
 
-| Sloupec | Název | Popis |
-|---------|-------|-------|
-| B | Pracovník | Jméno pracovníka |
-| C | Datum | Datum práce |
-| G | Počet hodin | Odpracované hodiny |
-| H | Popis | Popis práce |
-| I | Společnost-pobočka | Název organizace |
-| K | Výjezd (km) | Ujeté kilometry |
+OCR a exporty běží přes BullMQ. Po spuštění backendu je k dispozici endpoint `GET /api/system/queues`, který vrací počty úloh ve frontách (OCR/PDF/Pohoda). V lokálním prostředí stačí spustit službu Redis z `docker-compose.yml` nebo použít vlastní instanci.
 
-## 🤝 Přispívání
+### Frontend
 
-1. Forkněte repozitář
-2. Vytvořte feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commitněte změny (`git commit -m 'Add some AmazingFeature'`)
-4. Pushněte do branch (`git push origin feature/AmazingFeature`)
-5. Otevřete Pull Request
+```bash
+cd frontend
+npm install
+cp .env.local.example .env.local # upravte NEXT_PUBLIC_API_URL pokud backend běží na jiném hostiteli
+npm run dev
+```
 
-## 📝 Licence
+Frontend je dostupný na `http://localhost:3030` a komunikuje s backendem na `http://localhost:3029`.
 
-Tento projekt je licencován pod MIT licencí - viz [LICENSE](LICENSE) soubor.
+### Role & přístupy
 
-## 👥 Autoři
+Seed vytvoří uživatele `admin@fakturace.cz` / `admin123` (role `ADMIN`). JWT token nese roli (`ADMIN`, `ACCOUNTANT`, `TECHNICIAN`, `VIEWER`) a backend i frontend podle ní omezují akce – např. schválení faktury nebo re-OCR je dostupné jen ADMIN/ACCOUNTANT. Po přihlášení doporučujeme heslo změnit v sekci **Nastavení**.
 
-- Váš tým - *Initial work*
+## Legacy kód
 
-## 🙏 Poděkování
+Migrace z Next.js Pages Routeru je dokončená – legacy komponenty byly z repozitáře odstraněny. Potřebujete-li historickou verzi, použijte Git historii.
 
-- Děkujeme všem contributorům
-- Inspirace z různých open-source projektů
+## Build & test
 
----
+```bash
+# frontend produkční build
+cd frontend
+npm run build
 
-**Poznámka:** Pro produkční nasazení nezapomeňte změnit všechna výchozí hesla a JWT secret!
+# backend testy (volitelné, aktualizujte podle potřeby)
+cd ../backend
+npm test
+```
+
+### Testy
+
+#### Backend (`backend/`)
+
+- Testy vyžadují běžící PostgreSQL a CLI utilitu `psql`. V případě potřeby nastav proměnnou `TEST_DATABASE_URL` (např. `postgresql://postgres:postgres@localhost:5432/postgres`).
+- `npm test` spouští
+  - unit testy (`tests/invoiceTotals.test.js`),
+  - integrační testy (`tests/import.integration.test.js`, `tests/billing.integration.test.js`, `tests/workflow.integration.test.js`).
+- `npm run prisma:migrate` – aplikuje DB migrace.
+
+Frontend zatím nemá automatizované testy – TODO doplnit (unit/e2e).
+
+## Další zdroje
+
+- Specifikace: `docs/fakturace_v1.0_en.md`
+- Popis nasazení & skriptů: `deploy-to-new-server.sh`, `start.sh`, `stop.sh`
+- Audit & lock API: `backend/src/routes/accounting.js`, `backend/src/routes/audit.js`
+
+Případné otázky či návrhy na vylepšení dokumentujte v issue trackeru projektu.

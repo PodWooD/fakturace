@@ -14,8 +14,10 @@ before(async () => {
     data: {
       name: 'Test Fakturace s.r.o.',
       code: 'TF',
-      hourlyRate: 650,
-      kmRate: 12
+      hourlyRateCents: 65000,
+      kilometerRateCents: 1200,
+      hardwareMarginPct: 0,
+      softwareMarginPct: 0
     }
   });
 
@@ -26,7 +28,7 @@ before(async () => {
       organizationId,
       serviceName: 'Outsourcing',
       description: 'Měsíční paušál',
-      monthlyPrice: 5000,
+      monthlyPriceCents: 500000,
       isActive: true
     }
   });
@@ -52,8 +54,8 @@ before(async () => {
       itemName: 'Switch 24 portů',
       description: 'Instalace pro centrálu',
       quantity: 1,
-      unitPrice: 4500,
-      totalPrice: 4500,
+      unitPriceCents: 450000,
+      totalPriceCents: 450000,
       month: 7,
       year: 2025
     }

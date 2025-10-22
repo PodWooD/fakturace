@@ -8,8 +8,8 @@ const {
 
 test('calculateInvoiceTotals sums work, km, services and hardware correctly', () => {
   const organization = {
-    hourlyRate: 600,
-    kmRate: 10
+    hourlyRateCents: 60000,
+    kilometerRateCents: 1000
   };
 
   const workRecords = [
@@ -18,13 +18,13 @@ test('calculateInvoiceTotals sums work, km, services and hardware correctly', ()
   ];
 
   const services = [
-    { monthlyPrice: 5000, isActive: true },
-    { monthlyPrice: 2000, isActive: false }
+    { monthlyPriceCents: 500000, isActive: true },
+    { monthlyPriceCents: 200000, isActive: false }
   ];
 
   const hardware = [
-    { totalPrice: 3000 },
-    { quantity: 2, unitPrice: 1500 }
+    { totalPriceCents: 300000 },
+    { quantity: 2, unitPriceCents: 150000 }
   ];
 
   const result = calculateInvoiceTotals(organization, workRecords, services, hardware);
@@ -40,8 +40,8 @@ test('calculateInvoiceTotals sums work, km, services and hardware correctly', ()
 
 test('calculateInvoiceTotals tolerates missing values and rounds currency', () => {
   const organization = {
-    hourlyRate: '550.5',
-    kmRate: '9.5'
+    hourlyRateCents: 55050,
+    kilometerRateCents: 950
   };
 
   const workRecords = [
@@ -50,20 +50,20 @@ test('calculateInvoiceTotals tolerates missing values and rounds currency', () =
   ];
 
   const services = [
-    { monthlyPrice: '1234.567' }
+    { monthlyPriceCents: 123457 }
   ];
 
   const hardware = [
-    { quantity: 3, unitPrice: '99.99' }
+    { quantity: 3, unitPriceCents: 9999 }
   ];
 
   const result = calculateInvoiceTotals(organization, workRecords, services, hardware);
 
-  // Manuální výpočet
-  const expectedWork = roundCurrency((75.5 / 60) * 550.5);
-  const expectedKm = roundCurrency(12.3 * 9.5);
-  const expectedServices = roundCurrency(1234.567);
-  const expectedHardware = roundCurrency(3 * 99.99);
+  // Manuální výpočet (cents → CZK)
+  const expectedWork = roundCurrency((75.5 / 60) * (55050 / 100));
+  const expectedKm = roundCurrency(12.3 * (950 / 100));
+  const expectedServices = roundCurrency(123457 / 100);
+  const expectedHardware = roundCurrency(3 * (9999 / 100));
   const expectedTotal = roundCurrency(
     expectedWork + expectedKm + expectedServices + expectedHardware
   );

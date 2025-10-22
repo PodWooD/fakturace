@@ -1,10 +1,14 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+
+const router = express.Router();
+const { PrismaClient, RoundingMode } = require('@prisma/client');
 const authMiddleware = require('../middleware/auth');
+const { authorize } = authMiddleware;
 const { getBillingSummary } = require('../services/billingSummary');
+const { assertPeriodUnlocked } = require('../utils/accounting');
+const { logAudit } = require('../services/auditLogger');
 
 const prisma = new PrismaClient();
-const router = express.Router();
 
 const parsePeriodParams = (req) => {
   const month = req.query.month || new Date().getMonth() + 1;
@@ -16,7 +20,7 @@ const parsePeriodParams = (req) => {
   };
 };
 
-router.get('/summary', authMiddleware, async (req, res) => {
+router.get('/summary', authMiddleware, authorize('billing:read'), async (req, res) => {
   try {
     const { organizationId } = req.query;
     if (!organizationId) {
@@ -41,25 +45,16 @@ router.get('/summary', authMiddleware, async (req, res) => {
       }
     });
 
-    let parsedDraft = null;
-    if (draft) {
-      let payload = null;
-      try {
-        payload = JSON.parse(draft.data);
-      } catch (error) {
-        payload = null;
-      }
-
-      parsedDraft = {
-        data: payload,
-        updatedAt: draft.updatedAt,
-        updatedBy: draft.updatedBy
-      };
-    }
-
     res.json({
       base,
-      draft: parsedDraft
+      draft: draft
+        ? {
+            data: draft.data,
+            roundingMode: draft.roundingMode,
+            updatedAt: draft.updatedAt,
+            updatedBy: draft.updatedBy,
+          }
+        : null
     });
   } catch (error) {
     console.error('Billing summary error:', error);
@@ -67,9 +62,9 @@ router.get('/summary', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/draft', authMiddleware, async (req, res) => {
+router.put('/draft', authMiddleware, authorize('billing:write'), async (req, res) => {
   try {
-    const { organizationId, month, year, data } = req.body;
+    const { organizationId, month, year, data, roundingMode } = req.body;
 
     if (!organizationId || !month || !year || data === undefined) {
       return res.status(400).json({ error: 'organizationId, month, year a data jsou povinné' });
@@ -79,7 +74,16 @@ router.put('/draft', authMiddleware, async (req, res) => {
     const resolvedMonth = parseInt(month, 10);
     const resolvedYear = parseInt(year, 10);
 
-    const storedData = JSON.stringify(data ?? {});
+    await assertPeriodUnlocked(prisma, { month: resolvedMonth, year: resolvedYear });
+
+    const draftData = {
+      data: data ?? {},
+      updatedBy: req.user?.id || null,
+    };
+
+    if (roundingMode && RoundingMode[roundingMode]) {
+      draftData.roundingMode = roundingMode;
+    }
 
     const upserted = await prisma.billingDraft.upsert({
       where: {
@@ -90,31 +94,39 @@ router.put('/draft', authMiddleware, async (req, res) => {
         }
       },
       update: {
-        data: storedData,
-        updatedBy: req.user?.id || null
+        ...draftData
       },
       create: {
         organizationId: resolvedOrgId,
         month: resolvedMonth,
         year: resolvedYear,
-        data: storedData,
-        updatedBy: req.user?.id || null
+        ...draftData
       }
     });
 
-    let parsed = null;
-    try {
-      parsed = JSON.parse(upserted.data);
-    } catch (error) {
-      parsed = null;
-    }
-
     res.json({
-      data: parsed,
+      data: upserted.data,
+      roundingMode: upserted.roundingMode,
       updatedAt: upserted.updatedAt,
       updatedBy: upserted.updatedBy
     });
+
+    await logAudit(prisma, {
+      actorId: req.user?.id,
+      entity: 'BillingDraft',
+      entityId: upserted.id,
+      action: 'UPSERT',
+      diff: {
+        organizationId: resolvedOrgId,
+        month: resolvedMonth,
+        year: resolvedYear,
+        roundingMode: upserted.roundingMode,
+      },
+    });
   } catch (error) {
+    if (error.code === 'PERIOD_LOCKED') {
+      return res.status(423).json({ error: error.message });
+    }
     console.error('Billing draft error:', error);
     res.status(500).json({ error: 'Chyba při ukládání návrhu fakturace' });
   }

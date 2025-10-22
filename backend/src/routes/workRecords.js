@@ -1,79 +1,189 @@
 const express = require('express');
+
 const router = express.Router();
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient, WorkRecordStatus } = require('@prisma/client');
 const authMiddleware = require('../middleware/auth');
+const { authorize } = authMiddleware;
+const { fromCents, normalizeNumber } = require('../utils/money');
+const { assertPeriodUnlocked } = require('../utils/accounting');
+const { logAudit } = require('../services/auditLogger');
 
 const prisma = new PrismaClient();
+
+const mapOrganization = (organization) => {
+  if (!organization) {
+    return null;
+  }
+
+  return {
+    ...organization,
+    hourlyRate: fromCents(organization.hourlyRateCents),
+    kilometerRate: fromCents(organization.kilometerRateCents),
+  };
+};
+
+const enrichRecord = (record) => {
+  const organization = mapOrganization(record.organization);
+  const billingOrg = mapOrganization(record.billingOrg);
+  const minutes = record.minutes || 0;
+  const kilometers = record.kilometers || 0;
+  const hourlyRateCents = organization?.hourlyRateCents || 0;
+  const kilometerRateCents = organization?.kilometerRateCents || 0;
+  const hours = minutes / 60;
+  const hourlyAmountCents = Math.round(hours * hourlyRateCents);
+  const kmAmountCents = kilometers * kilometerRateCents;
+  const totalAmountCents = hourlyAmountCents + kmAmountCents;
+
+  return {
+    ...record,
+    organization,
+    billingOrg,
+    hours: Number(hours.toFixed(2)),
+    hourlyAmountCents,
+    hourlyAmount: fromCents(hourlyAmountCents),
+    kmAmountCents,
+    kmAmount: fromCents(kmAmountCents),
+    totalAmountCents,
+    totalAmount: fromCents(totalAmountCents),
+  };
+};
+
+const toInt = (value) => {
+  const numeric = normalizeNumber(value);
+  return numeric === null ? 0 : Math.round(numeric);
+};
+
+const parseMinutes = ({ minutes, hours, timeFrom, timeTo }) => {
+  if (minutes !== undefined && minutes !== null && minutes !== '') {
+    return toInt(minutes);
+  }
+
+  if (hours !== undefined && hours !== null && hours !== '') {
+    if (typeof hours === 'string' && hours.includes(':')) {
+      const [h, m] = hours.split(':').map((piece) => parseInt(piece, 10));
+      if (Number.isFinite(h) && Number.isFinite(m)) {
+        return h * 60 + m;
+      }
+    }
+    const numeric = normalizeNumber(hours);
+    if (numeric !== null) {
+      return Math.round(numeric * 60);
+    }
+  }
+
+  if (timeFrom && timeTo) {
+    const [fromHours, fromMinutes] = timeFrom.split(':').map((n) => parseInt(n, 10));
+    const [toHours, toMinutes] = timeTo.split(':').map((n) => parseInt(n, 10));
+    if (
+      Number.isFinite(fromHours) &&
+      Number.isFinite(fromMinutes) &&
+      Number.isFinite(toHours) &&
+      Number.isFinite(toMinutes)
+    ) {
+      const fromTotal = fromHours * 60 + fromMinutes;
+      const toTotal = toHours * 60 + toMinutes;
+      let total = toTotal - fromTotal;
+      if (total < 0) {
+        total += 24 * 60;
+      }
+      return total;
+    }
+  }
+
+  return 0;
+};
+
+const resolveDate = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const error = new Error('Neplatné datum');
+    error.code = 'INVALID_DATE';
+    throw error;
+  }
+  return date;
+};
+
+const ensureOrganizationExists = async (organizationId) => {
+  const organization = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { id: true, isActive: true },
+  });
+
+  if (!organization) {
+    const error = new Error('Organizace nenalezena');
+    error.code = 'ORGANIZATION_NOT_FOUND';
+    throw error;
+  }
+
+  if (!organization.isActive) {
+    const error = new Error('Organizace je deaktivována');
+    error.code = 'ORGANIZATION_INACTIVE';
+    throw error;
+  }
+
+  return organization;
+};
+
+const fetchRecordWithRelations = async (id) =>
+  prisma.workRecord.findUnique({
+    where: { id },
+    include: {
+      organization: true,
+      billingOrg: true,
+      user: {
+        select: { id: true, email: true, name: true },
+      },
+    },
+  });
 
 // GET pracovní záznamy s filtrováním
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    const { month, year, organizationId, worker, page = 1, limit = 50 } = req.query;
+    const {
+      month,
+      year,
+      organizationId,
+      worker,
+      status,
+      page = 1,
+      limit = 50,
+    } = req.query;
 
-    // Sestavení where podmínky
     const where = {};
-    
-    if (month) where.month = parseInt(month);
-    if (year) where.year = parseInt(year);
-    if (organizationId) where.organizationId = parseInt(organizationId);
-    if (worker) where.worker = { contains: worker, mode: 'insensitive' };
 
-    // Počet záznamů
+    if (month) where.month = parseInt(month, 10);
+    if (year) where.year = parseInt(year, 10);
+    if (organizationId) where.organizationId = parseInt(organizationId, 10);
+    if (worker) where.worker = { contains: worker, mode: 'insensitive' };
+    if (status) where.status = status;
+
     const total = await prisma.workRecord.count({ where });
 
-    // Načtení záznamů s pagination
     const records = await prisma.workRecord.findMany({
       where,
       include: {
-        organization: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            hourlyRate: true,
-            kmRate: true
-          }
+        organization: true,
+        billingOrg: true,
+        user: {
+          select: { id: true, email: true, name: true },
         },
-        billingOrg: {
-          select: {
-            id: true,
-            name: true,
-            code: true
-          }
-        }
       },
       orderBy: [
         { date: 'desc' },
-        { id: 'desc' }
+        { id: 'desc' },
       ],
-      skip: (parseInt(page) - 1) * parseInt(limit),
-      take: parseInt(limit)
-    });
-
-    // Výpočet cen
-    const recordsWithPrices = records.map(record => {
-      const hours = record.minutes / 60;
-      const hourlyAmount = hours * parseFloat(record.organization.hourlyRate);
-      const kmAmount = record.kilometers * parseFloat(record.organization.kmRate);
-      const totalAmount = hourlyAmount + kmAmount;
-
-      return {
-        ...record,
-        hours: hours.toFixed(2),
-        hourlyAmount: hourlyAmount.toFixed(2),
-        kmAmount: kmAmount.toFixed(2),
-        totalAmount: totalAmount.toFixed(2)
-      };
+      skip: (parseInt(page, 10) - 1) * parseInt(limit, 10),
+      take: parseInt(limit, 10),
     });
 
     res.json({
-      data: recordsWithPrices,
+      data: records.map(enrichRecord),
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: parseInt(page, 10),
+        limit: parseInt(limit, 10),
         total,
-        pages: Math.ceil(total / parseInt(limit))
-      }
+        pages: Math.ceil(total / parseInt(limit, 10)),
+      },
     });
   } catch (error) {
     console.error('Error fetching work records:', error);
@@ -82,7 +192,7 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // POST hromadné vytvoření záznamů (musí být před /:id)
-router.post('/bulk', authMiddleware, async (req, res) => {
+router.post('/bulk', authMiddleware, authorize('workRecords:write'), async (req, res) => {
   try {
     const { records } = req.body;
 
@@ -90,69 +200,86 @@ router.post('/bulk', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Pole záznamů je povinné' });
     }
 
-    const createdRecords = [];
+    const created = [];
     const errors = [];
 
-    for (let i = 0; i < records.length; i++) {
+    for (let index = 0; index < records.length; index += 1) {
+      const payload = records[index];
       try {
-        const record = records[i];
-
-        // Převod hodin na minuty
-        let totalMinutes = 0;
-        if (record.minutes) {
-          totalMinutes = parseInt(record.minutes);
-        } else if (record.hours) {
-          if (typeof record.hours === 'string' && record.hours.includes(':')) {
-            const [h, m] = record.hours.split(':');
-            totalMinutes = parseInt(h) * 60 + parseInt(m);
-          } else {
-            totalMinutes = parseFloat(record.hours) * 60;
-          }
-        } else if (record.timeFrom && record.timeTo) {
-          // Pokud je zadán čas od-do, vypočti minuty
-          const [fromHours, fromMinutes] = record.timeFrom.split(':').map(n => parseInt(n));
-          const [toHours, toMinutes] = record.timeTo.split(':').map(n => parseInt(n));
-          const fromTotalMinutes = fromHours * 60 + fromMinutes;
-          const toTotalMinutes = toHours * 60 + toMinutes;
-          totalMinutes = toTotalMinutes - fromTotalMinutes;
-
-          if (totalMinutes < 0) {
-            totalMinutes += 24 * 60; // Pokud přes půlnoc
-          }
+        const organizationId = parseInt(payload.organizationId, 10);
+        if (!organizationId) {
+          throw new Error('Chybí organizationId');
         }
 
-        const recordDate = new Date(record.date);
+        await ensureOrganizationExists(organizationId);
 
-        const created = await prisma.workRecord.create({
-          data: {
-            organizationId: parseInt(record.organizationId),
-            date: recordDate,
-            worker: record.worker,
-            description: record.description,
-            minutes: totalMinutes,
-            kilometers: parseInt(record.kilometers) || 0,
-            timeFrom: record.timeFrom || null,
-            timeTo: record.timeTo || null,
-            branch: record.branch || null,
-            month: recordDate.getMonth() + 1,
-            year: recordDate.getFullYear(),
-            createdBy: req.user.id
-          }
+        const recordDate = resolveDate(payload.date);
+        await assertPeriodUnlocked(prisma, {
+          month: recordDate.getMonth() + 1,
+          year: recordDate.getFullYear(),
         });
 
-        createdRecords.push(created);
+        const minutes = parseMinutes(payload);
+
+        const workRecord = await prisma.workRecord.create({
+          data: {
+            organizationId,
+            date: recordDate,
+            worker: payload.worker || 'Neznámý technik',
+            description: payload.description || '',
+            minutes,
+            kilometers: toInt(payload.kilometers),
+            timeFrom: payload.timeFrom || null,
+            timeTo: payload.timeTo || null,
+            branch: payload.branch || null,
+            month: recordDate.getMonth() + 1,
+            year: recordDate.getFullYear(),
+            projectCode: payload.projectCode || null,
+            billingOrgId: payload.billingOrgId
+              ? parseInt(payload.billingOrgId, 10)
+              : organizationId,
+            status: payload.status && WorkRecordStatus[payload.status]
+              ? payload.status
+              : WorkRecordStatus.DRAFT,
+            userId: req.user?.id || null,
+            createdBy: req.user?.id || null,
+          },
+          include: {
+            organization: true,
+            billingOrg: true,
+            user: {
+              select: { id: true, email: true, name: true },
+            },
+          },
+        });
+
+        const enriched = enrichRecord(workRecord);
+        await logAudit(prisma, {
+          actorId: req.user?.id,
+          entity: 'WorkRecord',
+          entityId: workRecord.id,
+          action: 'CREATE',
+          diff: {
+            minutes: enriched.minutes,
+            kilometers: enriched.kilometers,
+            organizationId: enriched.organizationId,
+            date: enriched.date,
+          },
+        });
+        created.push(enriched);
       } catch (error) {
         errors.push({
-          index: i,
-          error: error.message
+          index,
+          message: error.message,
         });
       }
     }
 
     res.json({
-      created: createdRecords.length,
+      created: created.length,
       total: records.length,
-      errors
+      records: created,
+      errors,
     });
   } catch (error) {
     console.error('Error bulk creating work records:', error);
@@ -164,82 +291,101 @@ router.post('/bulk', authMiddleware, async (req, res) => {
 router.get('/summary/:year/:month', authMiddleware, async (req, res) => {
   try {
     const { year, month } = req.params;
-    const { groupBy = 'billing' } = req.query; // 'billing' nebo 'workplace' pro seskupení podle pracoviště
+    const { groupBy = 'billing' } = req.query;
 
-    // Seskupit podle billingOrgId (výchozí) nebo organizationId
     const groupByField = groupBy === 'workplace' ? 'organizationId' : 'billingOrgId';
-    
+
     const summary = await prisma.workRecord.groupBy({
       by: [groupByField],
       where: {
-        month: parseInt(month),
-        year: parseInt(year)
+        month: parseInt(month, 10),
+        year: parseInt(year, 10),
       },
       _sum: {
         minutes: true,
-        kilometers: true
+        kilometers: true,
       },
       _count: {
-        id: true
-      }
+        id: true,
+      },
     });
 
-    // Načtení organizací
-    const organizationIds = summary.map(s => s[groupByField]).filter(id => id !== null);
+    const organizationIds = summary
+      .map((item) => item[groupByField])
+      .filter((id) => id !== null);
+
+    if (organizationIds.length === 0) {
+      return res.json([]);
+    }
+
     const organizations = await prisma.organization.findMany({
       where: {
-        id: { in: organizationIds }
-      }
+        id: { in: organizationIds },
+      },
     });
 
-    // Načíst faktury pro daný měsíc
     const invoices = await prisma.invoice.findMany({
       where: {
-        month: parseInt(month),
-        year: parseInt(year),
-        organizationId: { in: organizationIds }
+        month: parseInt(month, 10),
+        year: parseInt(year, 10),
+        organizationId: { in: organizationIds },
       },
       select: {
         organizationId: true,
         status: true,
-        invoiceNumber: true
-      }
+        invoiceNumber: true,
+        totalAmountCents: true,
+        totalVatCents: true,
+      },
     });
 
-    // Vytvořit mapu faktur podle organizace
-    const invoicesByOrg = invoices.reduce((acc, inv) => {
-      acc[inv.organizationId] = inv;
+    const invoicesByOrg = invoices.reduce((acc, invoice) => {
+      acc[invoice.organizationId] = invoice;
       return acc;
     }, {});
 
-    // Mapování výsledků s výpočtem cen
-    const result = summary.map(item => {
-      const orgId = item[groupByField];
-      const org = organizations.find(o => o.id === orgId);
-      
-      if (!org) return null;
-      
-      const hours = (item._sum.minutes || 0) / 60;
-      const hourlyAmount = hours * parseFloat(org.hourlyRate);
-      const kmAmount = (item._sum.kilometers || 0) * parseFloat(org.kmRate);
-      
-      // Najdi fakturu pro tuto organizaci
-      const invoice = invoicesByOrg[orgId];
+    const result = summary
+      .map((item) => {
+        const orgId = item[groupByField];
+        const organization = organizations.find((org) => org.id === orgId);
 
-      return {
-        organization: org,
-        recordsCount: item._count.id,
-        totalHours: hours.toFixed(2),
-        totalKm: item._sum.kilometers || 0,
-        hourlyAmount: hourlyAmount.toFixed(2),
-        kmAmount: kmAmount.toFixed(2),
-        totalAmount: (hourlyAmount + kmAmount).toFixed(2),
-        invoice: invoice ? {
-          status: invoice.status,
-          invoiceNumber: invoice.invoiceNumber
-        } : null
-      };
-    }).filter(item => item !== null);
+        if (!organization) {
+          return null;
+        }
+
+        const minutes = item._sum.minutes || 0;
+        const kilometers = item._sum.kilometers || 0;
+        const hours = minutes / 60;
+        const hourlyAmountCents = Math.round(hours * (organization.hourlyRateCents || 0));
+        const kmAmountCents = kilometers * (organization.kilometerRateCents || 0);
+        const totalAmountCents = hourlyAmountCents + kmAmountCents;
+
+        const invoice = invoicesByOrg[orgId];
+
+        return {
+          organization: mapOrganization(organization),
+          recordsCount: item._count.id,
+          totalHours: Number(hours.toFixed(2)),
+          totalKm: kilometers,
+          hourlyAmountCents,
+          hourlyAmount: fromCents(hourlyAmountCents),
+          kmAmountCents,
+          kmAmount: fromCents(kmAmountCents),
+          totalAmountCents,
+          totalAmount: fromCents(totalAmountCents),
+          invoice: invoice
+            ? {
+                status: invoice.status,
+                invoiceNumber: invoice.invoiceNumber,
+                totalAmountCents: invoice.totalAmountCents,
+                totalAmount: fromCents(invoice.totalAmountCents),
+                totalVatCents: invoice.totalVatCents,
+                totalVat: fromCents(invoice.totalVatCents),
+              }
+            : null,
+        };
+      })
+      .filter((item) => item !== null);
 
     res.json(result);
   } catch (error) {
@@ -254,21 +400,23 @@ router.get('/available-months', authMiddleware, async (req, res) => {
     const months = await prisma.workRecord.groupBy({
       by: ['month', 'year'],
       _count: {
-        id: true
+        id: true,
       },
       orderBy: [
         { year: 'desc' },
-        { month: 'desc' }
-      ]
+        { month: 'desc' },
+      ],
     });
 
-    // Formátování výsledků
-    const result = months.map(item => ({
+    const result = months.map((item) => ({
       month: item.month,
       year: item.year,
       recordsCount: item._count.id,
       label: `${item.month}/${item.year}`,
-      monthName: new Date(item.year, item.month - 1).toLocaleDateString('cs-CZ', { month: 'long', year: 'numeric' })
+      monthName: new Date(item.year, item.month - 1).toLocaleDateString('cs-CZ', {
+        month: 'long',
+        year: 'numeric',
+      }),
     }));
 
     res.json(result);
@@ -281,229 +429,234 @@ router.get('/available-months', authMiddleware, async (req, res) => {
 // GET detail záznamu (musí být jako poslední kvůli /:id)
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
-    const record = await prisma.workRecord.findUnique({
-      where: { id: parseInt(req.params.id) },
-      include: {
-        organization: true,
-        billingOrg: true
-      }
-    });
+    const record = await fetchRecordWithRelations(parseInt(req.params.id, 10));
 
     if (!record) {
       return res.status(404).json({ error: 'Záznam nenalezen' });
     }
 
-    res.json(record);
+    res.json(enrichRecord(record));
   } catch (error) {
     console.error('Error fetching work record:', error);
     res.status(500).json({ error: 'Chyba při načítání záznamu' });
   }
 });
 
+const buildWorkRecordPayload = async (payload, authorId) => {
+  const organizationId = parseInt(payload.organizationId, 10);
+  if (!organizationId) {
+    const error = new Error('Organizace je povinná');
+    error.code = 'MISSING_ORG';
+    throw error;
+  }
+
+  await ensureOrganizationExists(organizationId);
+
+  const recordDate = resolveDate(payload.date);
+  const month = recordDate.getMonth() + 1;
+  const year = recordDate.getFullYear();
+
+  await assertPeriodUnlocked(prisma, { month, year });
+
+  const minutes = parseMinutes(payload);
+
+  return {
+    organizationId,
+    date: recordDate,
+    worker: payload.worker || 'Neznámý technik',
+    description: payload.description || '',
+    minutes,
+    kilometers: toInt(payload.kilometers),
+    timeFrom: payload.timeFrom || null,
+    timeTo: payload.timeTo || null,
+    branch: payload.branch || null,
+    month,
+    year,
+    projectCode: payload.projectCode || null,
+    billingOrgId: payload.billingOrgId ? parseInt(payload.billingOrgId, 10) : organizationId,
+    status:
+      payload.status && WorkRecordStatus[payload.status]
+        ? payload.status
+        : WorkRecordStatus.DRAFT,
+    userId: authorId || null,
+    createdBy: authorId || null,
+  };
+};
+
 // POST vytvoření záznamu
-router.post('/', authMiddleware, async (req, res) => {
+router.post('/', authMiddleware, authorize('workRecords:write'), async (req, res) => {
   try {
-    const {
-      organizationId,
-      date,
-      worker,
-      description,
-      hours,
-      minutes,
-      kilometers,
-      timeFrom,
-      timeTo,
-      branch
-    } = req.body;
-
-    // Validace povinných polí
-    if (!organizationId || !date || !worker || !description) {
-      return res.status(400).json({
-        error: 'Organizace, datum, pracovník a popis jsou povinné'
-      });
-    }
-
-    // Převod hodin na minuty
-    let totalMinutes = 0;
-    if (minutes) {
-      totalMinutes = parseInt(minutes);
-    } else if (hours) {
-      // Podpora formátu "HH:MM" nebo desetinného čísla
-      if (typeof hours === 'string' && hours.includes(':')) {
-        const [h, m] = hours.split(':');
-        totalMinutes = parseInt(h) * 60 + parseInt(m);
-      } else {
-        totalMinutes = parseFloat(hours) * 60;
-      }
-    } else if (timeFrom && timeTo) {
-      // Pokud je zadán čas od-do, vypočti minuty
-      const [fromHours, fromMinutes] = timeFrom.split(':').map(n => parseInt(n));
-      const [toHours, toMinutes] = timeTo.split(':').map(n => parseInt(n));
-      const fromTotalMinutes = fromHours * 60 + fromMinutes;
-      const toTotalMinutes = toHours * 60 + toMinutes;
-      totalMinutes = toTotalMinutes - fromTotalMinutes;
-
-      if (totalMinutes < 0) {
-        totalMinutes += 24 * 60; // Pokud přes půlnoc
-      }
-    }
-
-    // Extrakce měsíce a roku z data
-    const recordDate = new Date(date);
-    const month = recordDate.getMonth() + 1;
-    const year = recordDate.getFullYear();
+    const payload = await buildWorkRecordPayload(req.body, req.user?.id);
 
     const record = await prisma.workRecord.create({
-      data: {
-        organizationId: parseInt(organizationId),
-        date: recordDate,
-        worker,
-        description,
-        minutes: totalMinutes,
-        kilometers: parseInt(kilometers) || 0,
-        timeFrom: timeFrom || null,
-        timeTo: timeTo || null,
-        branch: branch || null,
-        month,
-        year,
-        projectCode: req.body.projectCode || null,
-        billingOrgId: req.body.billingOrgId ? parseInt(req.body.billingOrgId) : parseInt(organizationId),
-        createdBy: req.user.id
-      },
+      data: payload,
       include: {
         organization: true,
-        billingOrg: true
-      }
+        billingOrg: true,
+        user: {
+          select: { id: true, email: true, name: true },
+        },
+      },
     });
 
-    res.status(201).json(record);
+    const enriched = enrichRecord(record);
+    await logAudit(prisma, {
+      actorId: req.user?.id,
+      entity: 'WorkRecord',
+      entityId: record.id,
+      action: 'CREATE',
+      diff: {
+        minutes: enriched.minutes,
+        kilometers: enriched.kilometers,
+        organizationId: enriched.organizationId,
+        date: enriched.date,
+      },
+    });
+
+    res.status(201).json(enriched);
   } catch (error) {
+    if (error.code === 'PERIOD_LOCKED') {
+      return res.status(423).json({ error: error.message });
+    }
     console.error('Error creating work record:', error);
     res.status(500).json({ error: 'Chyba při vytváření záznamu' });
   }
 });
 
 // PUT aktualizace záznamu
-router.put('/:id', authMiddleware, async (req, res) => {
+router.put('/:id', authMiddleware, authorize('workRecords:write'), async (req, res) => {
   try {
     const { id } = req.params;
-    const {
-      organizationId,
-      date,
-      worker,
-      description,
-      hours,
-      minutes,
-      kilometers,
-      timeFrom,
-      timeTo,
-      branch
-    } = req.body;
-
-    // Kontrola existence
-    const existing = await prisma.workRecord.findUnique({
-      where: { id: parseInt(id) }
-    });
+    const existing = await fetchRecordWithRelations(parseInt(id, 10));
 
     if (!existing) {
       return res.status(404).json({ error: 'Záznam nenalezen' });
     }
 
-    // Převod hodin na minuty
-    let totalMinutes = existing.minutes;
-    if (minutes !== undefined) {
-      totalMinutes = parseInt(minutes);
-    } else if (hours !== undefined) {
-      if (typeof hours === 'string' && hours.includes(':')) {
-        const [h, m] = hours.split(':');
-        totalMinutes = parseInt(h) * 60 + parseInt(m);
-      } else {
-        totalMinutes = parseFloat(hours) * 60;
-      }
-    } else if (timeFrom !== undefined && timeTo !== undefined && timeFrom && timeTo) {
-      // Pokud je zadán čas od-do, vypočti minuty
-      const [fromHours, fromMinutes] = timeFrom.split(':').map(n => parseInt(n));
-      const [toHours, toMinutes] = timeTo.split(':').map(n => parseInt(n));
-      const fromTotalMinutes = fromHours * 60 + fromMinutes;
-      const toTotalMinutes = toHours * 60 + toMinutes;
-      totalMinutes = toTotalMinutes - fromTotalMinutes;
-
-      if (totalMinutes < 0) {
-        totalMinutes += 24 * 60; // Pokud přes půlnoc
-      }
-    }
-
-    // Aktualizace měsíce a roku pokud se změnilo datum
-    const updateData = {
-      worker,
-      description,
-      minutes: totalMinutes,
-      kilometers: kilometers !== undefined ? parseInt(kilometers) : existing.kilometers
-    };
-
-    if (organizationId) {
-      updateData.organizationId = parseInt(organizationId);
-    }
-
-    if (date) {
-      const recordDate = new Date(date);
-      updateData.date = recordDate;
-      updateData.month = recordDate.getMonth() + 1;
-      updateData.year = recordDate.getFullYear();
-    }
-
-    // Přidej billingOrgId, projectCode, timeFrom, timeTo a branch pokud jsou v požadavku
-    if (req.body.billingOrgId !== undefined) {
-      updateData.billingOrgId = req.body.billingOrgId ? parseInt(req.body.billingOrgId) : null;
-    }
-    if (req.body.projectCode !== undefined) {
-      updateData.projectCode = req.body.projectCode;
-    }
-    if (timeFrom !== undefined) {
-      updateData.timeFrom = timeFrom || null;
-    }
-    if (timeTo !== undefined) {
-      updateData.timeTo = timeTo || null;
-    }
-    if (branch !== undefined) {
-      updateData.branch = branch || null;
-    }
+    const updatedPayload = await buildWorkRecordPayload(
+      {
+        ...existing,
+        ...req.body,
+      },
+      existing.userId || req.user?.id,
+    );
 
     const record = await prisma.workRecord.update({
-      where: { id: parseInt(id) },
-      data: updateData,
+      where: { id: parseInt(id, 10) },
+      data: updatedPayload,
       include: {
         organization: true,
-        billingOrg: true
-      }
+        billingOrg: true,
+        user: {
+          select: { id: true, email: true, name: true },
+        },
+      },
     });
 
-    res.json(record);
+    const enriched = enrichRecord(record);
+    await logAudit(prisma, {
+      actorId: req.user?.id,
+      entity: 'WorkRecord',
+      entityId: record.id,
+      action: 'UPDATE',
+      diff: {
+        status: enriched.status,
+        minutes: enriched.minutes,
+        kilometers: enriched.kilometers,
+      },
+    });
+
+    res.json(enriched);
   } catch (error) {
+    if (error.code === 'PERIOD_LOCKED') {
+      return res.status(423).json({ error: error.message });
+    }
     console.error('Error updating work record:', error);
     res.status(500).json({ error: 'Chyba při aktualizaci záznamu' });
   }
 });
 
-// DELETE smazání záznamu
-router.delete('/:id', authMiddleware, async (req, res) => {
+// POST změna stavu záznamu
+router.post('/:id/status', authMiddleware, authorize('workRecords:write'), async (req, res) => {
   try {
+    const { status } = req.body;
     const { id } = req.params;
 
-    const existing = await prisma.workRecord.findUnique({
-      where: { id: parseInt(id) }
-    });
+    if (!status || !WorkRecordStatus[status]) {
+      return res.status(400).json({ error: 'Neplatný stav záznamu' });
+    }
+
+    const existing = await fetchRecordWithRelations(parseInt(id, 10));
 
     if (!existing) {
       return res.status(404).json({ error: 'Záznam nenalezen' });
     }
 
+    await assertPeriodUnlocked(prisma, { month: existing.month, year: existing.year });
+
+    const record = await prisma.workRecord.update({
+      where: { id: parseInt(id, 10) },
+      data: { status },
+      include: {
+        organization: true,
+        billingOrg: true,
+        user: {
+          select: { id: true, email: true, name: true },
+        },
+      },
+    });
+
+    const enriched = enrichRecord(record);
+    await logAudit(prisma, {
+      actorId: req.user?.id,
+      entity: 'WorkRecord',
+      entityId: record.id,
+      action: 'STATUS_CHANGE',
+      diff: {
+        status: enriched.status,
+      },
+    });
+
+    res.json(enriched);
+  } catch (error) {
+    if (error.code === 'PERIOD_LOCKED') {
+      return res.status(423).json({ error: error.message });
+    }
+    console.error('Error updating work record status:', error);
+    res.status(500).json({ error: 'Chyba při změně stavu záznamu' });
+  }
+});
+
+// DELETE smazání záznamu
+router.delete('/:id', authMiddleware, authorize('workRecords:write'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const existing = await fetchRecordWithRelations(parseInt(id, 10));
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Záznam nenalezen' });
+    }
+
+    await assertPeriodUnlocked(prisma, { month: existing.month, year: existing.year });
+
     await prisma.workRecord.delete({
-      where: { id: parseInt(id) }
+      where: { id: parseInt(id, 10) },
+    });
+
+    await logAudit(prisma, {
+      actorId: req.user?.id,
+      entity: 'WorkRecord',
+      entityId: parseInt(id, 10),
+      action: 'DELETE',
+      diff: {},
     });
 
     res.json({ message: 'Záznam smazán' });
   } catch (error) {
+    if (error.code === 'PERIOD_LOCKED') {
+      return res.status(423).json({ error: error.message });
+    }
     console.error('Error deleting work record:', error);
     res.status(500).json({ error: 'Chyba při mazání záznamu' });
   }

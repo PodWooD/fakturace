@@ -1,35 +1,59 @@
 const express = require('express');
+
 const router = express.Router();
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient, InvoiceStatus, RoundingMode } = require('@prisma/client');
 const authMiddleware = require('../middleware/auth');
-const PDFGenerator = require('../services/pdfGenerator');
+const { authorize } = authMiddleware;
 const PohodaExport = require('../services/pohodaExport');
-const {
-  DEFAULT_VAT_RATE,
-  calculateInvoiceTotals,
-  roundCurrency
-} = require('../services/invoiceTotals');
+const storageService = require('../services/storageService');
+const { generateInvoicePdf, getPdfQueueStats } = require('../queues/pdfQueue');
+const { generatePohodaXml, getPohodaQueueStats } = require('../queues/pohodaQueue');
+const { generateIsdoc, getIsdocQueueStats } = require('../queues/isdocQueue');
+const { calculateInvoiceTotals } = require('../services/invoiceTotals');
+const { assertPeriodUnlocked } = require('../utils/accounting');
+const { fromCents } = require('../utils/money');
 
 const prisma = new PrismaClient();
-const pdfGenerator = new PDFGenerator();
 const pohodaExport = new PohodaExport();
-
-const VAT_RATE = DEFAULT_VAT_RATE;
 
 const buildWorkRecordWhere = (organizationId, month, year) => ({
   OR: [
     {
       billingOrgId: organizationId,
       month,
-      year
+      year,
     },
     {
       billingOrgId: null,
       organizationId,
       month,
-      year
-    }
-  ]
+      year,
+    },
+  ],
+});
+
+const mapOrganization = (organization) => ({
+  ...organization,
+  hourlyRate: fromCents(organization.hourlyRateCents),
+  kilometerRate: fromCents(organization.kilometerRateCents),
+  outsourcingFee: fromCents(organization.outsourcingFeeCents),
+});
+
+const mapService = (service) => ({
+  ...service,
+  monthlyPrice: fromCents(service.monthlyPriceCents),
+});
+
+const mapHardware = (item) => ({
+  ...item,
+  unitPrice: fromCents(item.unitPriceCents),
+  totalPrice: fromCents(item.totalPriceCents),
+});
+
+const mapInvoice = (invoice) => ({
+  ...invoice,
+  totalAmount: fromCents(invoice.totalAmountCents),
+  totalVat: fromCents(invoice.totalVatCents),
 });
 
 const collectInvoiceData = async (organizationId, month, year, { includeWorkplace = false } = {}) => {
@@ -38,49 +62,59 @@ const collectInvoiceData = async (organizationId, month, year, { includeWorkplac
   const resolvedYear = parseInt(year, 10);
 
   const organization = await prisma.organization.findUnique({
-    where: { id: resolvedOrgId }
+    where: { id: resolvedOrgId },
   });
 
   if (!organization) {
     return null;
   }
 
-  const [workRecords, services, hardware] = await Promise.all([
+  const [workRecords, servicesRaw, hardwareRaw] = await Promise.all([
     prisma.workRecord.findMany({
       where: buildWorkRecordWhere(resolvedOrgId, resolvedMonth, resolvedYear),
-      include: includeWorkplace ? { organization: true, billingOrg: true } : undefined,
-      orderBy: { date: 'asc' }
+      include: includeWorkplace
+        ? {
+            organization: true,
+            billingOrg: true,
+          }
+        : undefined,
+      orderBy: { date: 'asc' },
     }),
     prisma.service.findMany({
       where: {
         organizationId: resolvedOrgId,
-        isActive: true
-      }
+        isActive: true,
+      },
     }),
     prisma.hardware.findMany({
       where: {
         organizationId: resolvedOrgId,
         month: resolvedMonth,
-        year: resolvedYear
-      }
-    })
+        year: resolvedYear,
+      },
+    }),
   ]);
 
-  const totals = calculateInvoiceTotals(organization, workRecords, services, hardware, VAT_RATE);
+  const services = servicesRaw.map(mapService);
+  const hardware = hardwareRaw.map(mapHardware);
+
+  const totals = calculateInvoiceTotals(organization, workRecords, services, hardware);
 
   return {
-    organization,
+    organization: mapOrganization(organization),
     workRecords,
     services,
     hardware,
-    totals
+    totals,
+    month: resolvedMonth,
+    year: resolvedYear,
   };
 };
 
 const generateInvoiceNumber = async (year, month) => {
   const lastInvoice = await prisma.invoice.findFirst({
     where: { year },
-    orderBy: { invoiceNumber: 'desc' }
+    orderBy: { invoiceNumber: 'desc' },
   });
 
   if (!lastInvoice) {
@@ -95,8 +129,8 @@ const getInvoiceWithData = async (invoiceId) => {
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     include: {
-      organization: true
-    }
+      organization: true,
+    },
   });
 
   if (!invoice) {
@@ -107,27 +141,38 @@ const getInvoiceWithData = async (invoiceId) => {
   const month = invoice.month;
   const year = invoice.year;
 
-  const [workRecords, services, hardware] = await Promise.all([
+  const [workRecords, servicesRaw, hardwareRaw] = await Promise.all([
     prisma.workRecord.findMany({
       where: buildWorkRecordWhere(invoice.organizationId, month, year),
-      orderBy: { date: 'asc' }
+      orderBy: { date: 'asc' },
     }),
     prisma.service.findMany({
       where: {
         organizationId: invoice.organizationId,
-        isActive: true
-      }
+        isActive: true,
+      },
     }),
     prisma.hardware.findMany({
       where: {
         organizationId: invoice.organizationId,
         month,
-        year
-      }
-    })
+        year,
+      },
+    }),
   ]);
 
-  return { invoice, organization, workRecords, services, hardware };
+  const services = servicesRaw.map(mapService);
+  const hardware = hardwareRaw.map(mapHardware);
+  const totals = calculateInvoiceTotals(organization, workRecords, services, hardware);
+
+  return {
+    invoice: mapInvoice(invoice),
+    organization: mapOrganization(organization),
+    workRecords,
+    services,
+    hardware,
+    totals,
+  };
 };
 
 // GET faktury s filtrováním
@@ -136,9 +181,9 @@ router.get('/', authMiddleware, async (req, res) => {
     const { month, year, organizationId, status, page = 1, limit = 20 } = req.query;
 
     const where = {};
-    if (month) where.month = parseInt(month);
-    if (year) where.year = parseInt(year);
-    if (organizationId) where.organizationId = parseInt(organizationId);
+    if (month) where.month = parseInt(month, 10);
+    if (year) where.year = parseInt(year, 10);
+    if (organizationId) where.organizationId = parseInt(organizationId, 10);
     if (status) where.status = status;
 
     const total = await prisma.invoice.count({ where });
@@ -152,27 +197,27 @@ router.get('/', authMiddleware, async (req, res) => {
             name: true,
             code: true,
             ico: true,
-            dic: true
-          }
-        }
+            dic: true,
+          },
+        },
       },
       orderBy: [
         { year: 'desc' },
         { month: 'desc' },
-        { invoiceNumber: 'desc' }
+        { invoiceNumber: 'desc' },
       ],
-      skip: (parseInt(page) - 1) * parseInt(limit),
-      take: parseInt(limit)
+      skip: (parseInt(page, 10) - 1) * parseInt(limit, 10),
+      take: parseInt(limit, 10),
     });
 
     res.json({
-      data: invoices,
+      data: invoices.map(mapInvoice),
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: parseInt(page, 10),
+        limit: parseInt(limit, 10),
         total,
-        pages: Math.ceil(total / parseInt(limit))
-      }
+        pages: Math.ceil(total / parseInt(limit, 10)),
+      },
     });
   } catch (error) {
     console.error('Error fetching invoices:', error);
@@ -183,21 +228,13 @@ router.get('/', authMiddleware, async (req, res) => {
 // GET detail faktury
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
-    const invoiceId = parseInt(req.params.id, 10);
-    const payload = await getInvoiceWithData(invoiceId);
+    const payload = await getInvoiceWithData(parseInt(req.params.id, 10));
 
     if (!payload) {
       return res.status(404).json({ error: 'Faktura nenalezena' });
     }
 
-    const { invoice, workRecords, services, hardware } = payload;
-
-    res.json({
-      ...invoice,
-      workRecords,
-      services,
-      hardware
-    });
+    res.json(payload);
   } catch (error) {
     console.error('Error fetching invoice:', error);
     res.status(500).json({ error: 'Chyba při načítání faktury' });
@@ -205,13 +242,13 @@ router.get('/:id', authMiddleware, async (req, res) => {
 });
 
 // POST preview faktury (bez vytvoření)
-router.post('/preview', authMiddleware, async (req, res) => {
+router.post('/preview', authMiddleware, authorize('invoices:generate'), async (req, res) => {
   try {
     const { organizationId, month, year } = req.body;
 
     if (!organizationId || !month || !year) {
       return res.status(400).json({
-        error: 'Organizace, měsíc a rok jsou povinné'
+        error: 'Organizace, měsíc a rok jsou povinné',
       });
     }
 
@@ -221,24 +258,14 @@ router.post('/preview', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Organizace nenalezena' });
     }
 
-    const { organization, workRecords, services, hardware, totals } = payload;
-
     res.json({
-      organization,
-      month: parseInt(month, 10),
-      year: parseInt(year, 10),
-      workRecords,
-      services,
-      hardware,
-      summary: {
-        workAmount: totals.workAmount.toFixed(2),
-        kmAmount: totals.kmAmount.toFixed(2),
-        servicesAmount: totals.servicesAmount.toFixed(2),
-        hardwareAmount: totals.hardwareAmount.toFixed(2),
-        totalAmount: totals.totalAmount.toFixed(2),
-        totalVat: totals.totalVat.toFixed(2),
-        totalWithVat: totals.totalWithVat.toFixed(2)
-      }
+      organization: payload.organization,
+      month: payload.month,
+      year: payload.year,
+      workRecords: payload.workRecords,
+      services: payload.services,
+      hardware: payload.hardware,
+      totals: payload.totals,
     });
   } catch (error) {
     console.error('Error creating invoice preview:', error);
@@ -247,13 +274,13 @@ router.post('/preview', authMiddleware, async (req, res) => {
 });
 
 // POST generování faktury
-router.post('/generate', authMiddleware, async (req, res) => {
+router.post('/generate', authMiddleware, authorize('invoices:generate'), async (req, res) => {
   try {
-    const { organizationId, month, year } = req.body;
+    const { organizationId, month, year, roundingMode = RoundingMode.HALF_UP } = req.body;
 
     if (!organizationId || !month || !year) {
       return res.status(400).json({
-        error: 'Organizace, měsíc a rok jsou povinné'
+        error: 'Organizace, měsíc a rok jsou povinné',
       });
     }
 
@@ -261,17 +288,19 @@ router.post('/generate', authMiddleware, async (req, res) => {
     const resolvedMonth = parseInt(month, 10);
     const resolvedYear = parseInt(year, 10);
 
+    await assertPeriodUnlocked(prisma, { month: resolvedMonth, year: resolvedYear });
+
     const existing = await prisma.invoice.findFirst({
       where: {
         organizationId: resolvedOrgId,
         month: resolvedMonth,
-        year: resolvedYear
-      }
+        year: resolvedYear,
+      },
     });
 
     if (existing) {
       return res.status(400).json({
-        error: 'Faktura pro tuto organizaci a období již existuje'
+        error: 'Faktura pro tuto organizaci a období již existuje',
       });
     }
 
@@ -290,45 +319,59 @@ router.post('/generate', authMiddleware, async (req, res) => {
         invoiceNumber,
         month: resolvedMonth,
         year: resolvedYear,
-        totalAmount: totals.totalAmount,
-        totalVat: totals.totalVat,
-        status: 'DRAFT'
+        totalAmountCents: totals.totalAmountCents,
+        totalVatCents: totals.totalVatCents,
+        roundingMode,
+        status: InvoiceStatus.DRAFT,
+        generatedAt: new Date(),
       },
       include: {
-        organization: true
-      }
+        organization: true,
+      },
     });
 
     res.status(201).json({
-      ...invoice,
+      invoice: mapInvoice(invoice),
       breakdown: {
-        workAmount: totals.workAmount.toFixed(2),
-        kmAmount: totals.kmAmount.toFixed(2),
-        servicesAmount: totals.servicesAmount.toFixed(2),
-        hardwareAmount: totals.hardwareAmount.toFixed(2),
+        workAmountCents: totals.workAmountCents,
+        workAmount: totals.workAmount,
+        kmAmountCents: totals.kmAmountCents,
+        kmAmount: totals.kmAmount,
+        servicesAmountCents: totals.servicesAmountCents,
+        servicesAmount: totals.servicesAmount,
+        hardwareAmountCents: totals.hardwareAmountCents,
+        hardwareAmount: totals.hardwareAmount,
         workRecordsCount: workRecords.length,
         servicesCount: services.length,
-        hardwareCount: hardware.length
+        hardwareCount: hardware.length,
       },
       totals: {
-        totalAmount: totals.totalAmount.toFixed(2),
-        totalVat: totals.totalVat.toFixed(2)
-      }
+        totalAmountCents: totals.totalAmountCents,
+        totalAmount: totals.totalAmount,
+        totalVatCents: totals.totalVatCents,
+        totalVat: totals.totalVat,
+        totalWithVatCents: totals.totalWithVatCents,
+        totalWithVat: totals.totalWithVat,
+      },
     });
   } catch (error) {
+    if (error.code === 'PERIOD_LOCKED') {
+      return res.status(423).json({ error: error.message });
+    }
     console.error('Error generating invoice:', error);
     res.status(500).json({ error: 'Chyba při generování faktury' });
   }
 });
 
 // PUT aktualizace faktury
-router.put('/:id', authMiddleware, async (req, res) => {
+router.put('/:id', authMiddleware, authorize('invoices:generate'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, notes, totalAmount, totalVat } = req.body;
+    const { status, notes, totalAmount, totalAmountCents, totalVat, totalVatCents, roundingMode } =
+      req.body;
 
     const existing = await prisma.invoice.findUnique({
-      where: { id: parseInt(id) }
+      where: { id: parseInt(id, 10) },
     });
 
     if (!existing) {
@@ -336,20 +379,33 @@ router.put('/:id', authMiddleware, async (req, res) => {
     }
 
     const updateData = {};
-    if (status) updateData.status = status;
+    if (status && InvoiceStatus[status]) updateData.status = status;
     if (notes !== undefined) updateData.notes = notes;
-    if (totalAmount !== undefined) updateData.totalAmount = totalAmount;
-    if (totalVat !== undefined) updateData.totalVat = totalVat;
+    if (roundingMode && RoundingMode[roundingMode]) {
+      updateData.roundingMode = roundingMode;
+    }
+
+    if (totalAmountCents !== undefined) {
+      updateData.totalAmountCents = parseInt(totalAmountCents, 10);
+    } else if (totalAmount !== undefined) {
+      updateData.totalAmountCents = Math.round(Number(totalAmount) * 100);
+    }
+
+    if (totalVatCents !== undefined) {
+      updateData.totalVatCents = parseInt(totalVatCents, 10);
+    } else if (totalVat !== undefined) {
+      updateData.totalVatCents = Math.round(Number(totalVat) * 100);
+    }
 
     const invoice = await prisma.invoice.update({
-      where: { id: parseInt(id) },
+      where: { id: parseInt(id, 10) },
       data: updateData,
       include: {
-        organization: true
-      }
+        organization: true,
+      },
     });
 
-    res.json(invoice);
+    res.json(mapInvoice(invoice));
   } catch (error) {
     console.error('Error updating invoice:', error);
     res.status(500).json({ error: 'Chyba při aktualizaci faktury' });
@@ -357,27 +413,26 @@ router.put('/:id', authMiddleware, async (req, res) => {
 });
 
 // DELETE smazání faktury
-router.delete('/:id', authMiddleware, async (req, res) => {
+router.delete('/:id', authMiddleware, authorize('invoices:delete'), async (req, res) => {
   try {
     const { id } = req.params;
 
     const existing = await prisma.invoice.findUnique({
-      where: { id: parseInt(id) }
+      where: { id: parseInt(id, 10) },
     });
 
     if (!existing) {
       return res.status(404).json({ error: 'Faktura nenalezena' });
     }
 
-    // Kontrola, zda není faktura již odeslána nebo zaplacená
-    if (existing.status === 'SENT' || existing.status === 'PAID') {
-      return res.status(400).json({ 
-        error: 'Nelze smazat odeslanou nebo zaplacenou fakturu' 
+    if (existing.status === InvoiceStatus.SENT || existing.status === InvoiceStatus.PAID) {
+      return res.status(400).json({
+        error: 'Nelze smazat odeslanou nebo zaplacenou fakturu',
       });
     }
 
     await prisma.invoice.delete({
-      where: { id: parseInt(id) }
+      where: { id: parseInt(id, 10) },
     });
 
     res.json({ message: 'Faktura smazána' });
@@ -388,7 +443,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 });
 
 // POST hromadné generování faktur
-router.post('/generate-batch', authMiddleware, async (req, res) => {
+router.post('/generate-batch', authMiddleware, authorize('invoices:generate'), async (req, res) => {
   try {
     const { month, year } = req.body;
 
@@ -399,24 +454,26 @@ router.post('/generate-batch', authMiddleware, async (req, res) => {
     const resolvedMonth = parseInt(month, 10);
     const resolvedYear = parseInt(year, 10);
 
+    await assertPeriodUnlocked(prisma, { month: resolvedMonth, year: resolvedYear });
+
     const organizationsWithRecords = await prisma.workRecord.groupBy({
       by: ['billingOrgId'],
       where: {
         month: resolvedMonth,
         year: resolvedYear,
         billingOrgId: {
-          not: null
-        }
+          not: null,
+        },
       },
       _count: {
-        id: true
-      }
+        id: true,
+      },
     });
 
     const results = {
       generated: [],
       skipped: [],
-      errors: []
+      errors: [],
     };
 
     for (const entry of organizationsWithRecords) {
@@ -427,14 +484,14 @@ router.post('/generate-batch', authMiddleware, async (req, res) => {
           where: {
             organizationId: orgId,
             month: resolvedMonth,
-            year: resolvedYear
-          }
+            year: resolvedYear,
+          },
         });
 
         if (existing) {
           results.skipped.push({
             organizationId: orgId,
-            reason: 'Faktura již existuje'
+            reason: 'Faktura již existuje',
           });
           continue;
         }
@@ -444,7 +501,7 @@ router.post('/generate-batch', authMiddleware, async (req, res) => {
         if (!payload) {
           results.errors.push({
             organizationId: orgId,
-            error: 'Organizace nenalezena'
+            error: 'Organizace nenalezena',
           });
           continue;
         }
@@ -456,17 +513,18 @@ router.post('/generate-batch', authMiddleware, async (req, res) => {
             invoiceNumber,
             month: resolvedMonth,
             year: resolvedYear,
-            totalAmount: payload.totals.totalAmount,
-            totalVat: payload.totals.totalVat,
-            status: 'DRAFT'
-          }
+            totalAmountCents: payload.totals.totalAmountCents,
+            totalVatCents: payload.totals.totalVatCents,
+            status: InvoiceStatus.DRAFT,
+            generatedAt: new Date(),
+          },
         });
 
-        results.generated.push(invoice);
+        results.generated.push(mapInvoice(invoice));
       } catch (error) {
         results.errors.push({
           organizationId: orgId,
-          error: error.message
+          error: error.message,
         });
       }
     }
@@ -476,21 +534,23 @@ router.post('/generate-batch', authMiddleware, async (req, res) => {
         total: organizationsWithRecords.length,
         generated: results.generated.length,
         skipped: results.skipped.length,
-        errors: results.errors.length
+        errors: results.errors.length,
       },
-      results
+      results,
     });
   } catch (error) {
+    if (error.code === 'PERIOD_LOCKED') {
+      return res.status(423).json({ error: error.message });
+    }
     console.error('Error batch generating invoices:', error);
     res.status(500).json({ error: 'Chyba při hromadném generování faktur' });
   }
 });
 
 // GET PDF faktury
-router.get('/:id/pdf', authMiddleware, async (req, res) => {
+router.get('/:id/pdf', authMiddleware, authorize('invoices:export'), async (req, res) => {
   try {
-    const invoiceId = parseInt(req.params.id, 10);
-    const payload = await getInvoiceWithData(invoiceId);
+    const payload = await getInvoiceWithData(parseInt(req.params.id, 10));
 
     if (!payload) {
       return res.status(404).json({ error: 'Faktura nenalezena' });
@@ -498,17 +558,33 @@ router.get('/:id/pdf', authMiddleware, async (req, res) => {
 
     const { invoice, organization, workRecords, services, hardware } = payload;
 
-    const pdfData = await pdfGenerator.generateInvoice(
-      invoice,
-      workRecords,
-      services,
-      hardware,
-      organization
-    );
+    let pdfLocation = invoice.pdfUrl || null;
+    let buffer = null;
 
+    if (pdfLocation) {
+      buffer = await storageService.getFileBuffer(pdfLocation).catch(() => null);
+    }
+
+    if (!buffer) {
+      pdfLocation = await generateInvoicePdf({
+        invoice,
+        organization,
+        workRecords,
+        services,
+        hardware,
+      });
+      buffer = await storageService.getFileBuffer(pdfLocation);
+
+      await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { pdfUrl: pdfLocation },
+      });
+    }
+
+    const filename = `${invoice.invoiceNumber}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoiceNumber}.pdf"`);
-    res.send(pdfData);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   } catch (error) {
     console.error('Error generating PDF:', error);
     res.status(500).json({ error: 'Chyba při generování PDF' });
@@ -516,61 +592,138 @@ router.get('/:id/pdf', authMiddleware, async (req, res) => {
 });
 
 // GET Pohoda XML
-router.get('/:id/pohoda-xml', authMiddleware, async (req, res) => {
+router.get('/:id/pohoda-xml', authMiddleware, authorize('invoices:export'), async (req, res) => {
   try {
-    const invoiceId = parseInt(req.params.id, 10);
-    const payload = await getInvoiceWithData(invoiceId);
+    const payload = await getInvoiceWithData(parseInt(req.params.id, 10));
 
     if (!payload) {
       return res.status(404).json({ error: 'Faktura nenalezena' });
     }
 
     const { invoice, organization, workRecords, services, hardware } = payload;
-    const xmlData = pohodaExport.generateInvoiceXML(
-      invoice,
-      workRecords,
-      services,
-      hardware,
-      organization
-    );
 
+    let xmlLocation = invoice.pohodaXml || null;
+    let buffer = null;
+
+    if (xmlLocation) {
+      buffer = await storageService.getFileBuffer(xmlLocation).catch(() => null);
+    }
+
+    if (!buffer) {
+      xmlLocation = await generatePohodaXml({
+        invoice,
+        organization,
+        workRecords,
+        services,
+        hardware,
+      });
+      buffer = await storageService.getFileBuffer(xmlLocation);
+
+      await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { pohodaXml: xmlLocation },
+      });
+    }
+
+    const filename = `${invoice.invoiceNumber}.xml`;
     res.setHeader('Content-Type', 'application/xml; charset=windows-1250');
-    res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoiceNumber}.xml"`);
-    res.send(xmlData);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   } catch (error) {
     console.error('Error generating Pohoda XML:', error);
     res.status(500).json({ error: 'Chyba při generování Pohoda XML' });
   }
 });
 
-router.get('/:id/export', authMiddleware, async (req, res) => {
+// GET ISDOC
+router.get('/:id/isdoc', authMiddleware, authorize('invoices:export'), async (req, res) => {
   try {
-    const invoiceId = parseInt(req.params.id, 10);
-    const payload = await getInvoiceWithData(invoiceId);
+    const payload = await getInvoiceWithData(parseInt(req.params.id, 10));
+
+    if (!payload) {
+      return res.status(404).json({ error: 'Faktura nenalezena' });
+    }
+
+    const { invoice, organization, workRecords, services, hardware, totals } = payload;
+
+    let isdocLocation = invoice.isdocUrl || null;
+    let buffer = null;
+
+    if (isdocLocation) {
+      buffer = await storageService.getFileBuffer(isdocLocation).catch(() => null);
+    }
+
+    if (!buffer) {
+      isdocLocation = await generateIsdoc({
+        invoice,
+        organization,
+        workRecords,
+        services,
+        hardware,
+        totals,
+      });
+      buffer = await storageService.getFileBuffer(isdocLocation);
+
+      await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { isdocUrl: isdocLocation },
+      });
+    }
+
+    const filename = `${invoice.invoiceNumber}.isdoc`;
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('Error generating ISDOC:', error);
+    res.status(500).json({ error: 'Chyba při generování ISDOC' });
+  }
+});
+
+router.get('/:id/export', authMiddleware, authorize('invoices:export'), async (req, res) => {
+  try {
+    const payload = await getInvoiceWithData(parseInt(req.params.id, 10));
 
     if (!payload) {
       return res.status(404).json({ error: 'Faktura nenalezena' });
     }
 
     const { invoice, organization, workRecords, services, hardware } = payload;
-    const xmlData = pohodaExport.generateInvoiceXML(
-      invoice,
-      workRecords,
-      services,
-      hardware,
-      organization
-    );
+    let xmlLocation = invoice.pohodaXml || null;
+    let buffer = null;
 
+    if (xmlLocation) {
+      buffer = await storageService.getFileBuffer(xmlLocation).catch(() => null);
+    }
+
+    if (!buffer) {
+      const stored = await pohodaExport.savePohodaXML(
+        invoice,
+        workRecords,
+        services,
+        hardware,
+        organization,
+      );
+      xmlLocation = stored.location;
+      buffer = await storageService.getFileBuffer(xmlLocation);
+
+      await prisma.invoice.update({
+        where: { id: invoice.id },
+        data: { pohodaXml: xmlLocation },
+      });
+    }
+
+    const filename = `${invoice.invoiceNumber}.xml`;
     res.setHeader('Content-Type', 'application/xml; charset=windows-1250');
-    res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoiceNumber}.xml"`);
-    res.send(xmlData);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   } catch (error) {
     console.error('Error exporting invoice XML:', error);
     res.status(500).json({ error: 'Chyba při exportu faktury' });
   }
 });
 
-router.post('/export-batch', authMiddleware, async (req, res) => {
+router.post('/export-batch', authMiddleware, authorize('invoices:export'), async (req, res) => {
   try {
     const { invoiceIds } = req.body;
 
@@ -626,48 +779,67 @@ router.get('/stats/:year', authMiddleware, async (req, res) => {
     const stats = await prisma.invoice.groupBy({
       by: ['month', 'status'],
       where: {
-        year: parseInt(year)
+        year: parseInt(year, 10),
       },
       _sum: {
-        totalAmount: true,
-        totalVat: true
+        totalAmountCents: true,
+        totalVatCents: true,
       },
       _count: {
-        id: true
-      }
+        id: true,
+      },
     });
 
-    // Transformace dat pro lepší použití
     const monthlyStats = {};
-    
-    for (let month = 1; month <= 12; month++) {
-      monthlyStats[month] = {
+
+    for (let monthIdx = 1; monthIdx <= 12; monthIdx += 1) {
+      monthlyStats[monthIdx] = {
+        totalCents: 0,
         total: 0,
-        count: 0,
         byStatus: {
-          DRAFT: { count: 0, amount: 0 },
-          SENT: { count: 0, amount: 0 },
-          PAID: { count: 0, amount: 0 },
-          CANCELLED: { count: 0, amount: 0 }
-        }
+          DRAFT: { count: 0, amountCents: 0, amount: 0 },
+          SENT: { count: 0, amountCents: 0, amount: 0 },
+          PAID: { count: 0, amountCents: 0, amount: 0 },
+          CANCELLED: { count: 0, amountCents: 0, amount: 0 },
+        },
       };
     }
 
-    stats.forEach(stat => {
-      const amount = parseFloat(stat._sum.totalAmount || 0);
-      monthlyStats[stat.month].total += amount;
-      monthlyStats[stat.month].count += stat._count.id;
-      monthlyStats[stat.month].byStatus[stat.status] = {
+    stats.forEach((stat) => {
+      const amountCents = stat._sum.totalAmountCents || 0;
+      const entry = monthlyStats[stat.month];
+      entry.totalCents += amountCents;
+      entry.total += stat._count.id;
+      entry.byStatus[stat.status] = {
         count: stat._count.id,
-        amount
+        amountCents,
+        amount: fromCents(amountCents),
       };
     });
 
+    const yearTotalCents = Object.values(monthlyStats).reduce(
+      (sum, monthStat) => sum + monthStat.totalCents,
+      0,
+    );
+    const yearCount = Object.values(monthlyStats).reduce(
+      (sum, monthStat) => sum + monthStat.total,
+      0,
+    );
+
     res.json({
-      year: parseInt(year),
-      monthlyStats,
-      yearTotal: Object.values(monthlyStats).reduce((sum, month) => sum + month.total, 0),
-      yearCount: Object.values(monthlyStats).reduce((sum, month) => sum + month.count, 0)
+      year: parseInt(year, 10),
+      monthlyStats: Object.entries(monthlyStats).reduce((acc, [key, value]) => {
+        acc[key] = {
+          totalCents: value.totalCents,
+          total: value.total,
+          totalAmount: fromCents(value.totalCents),
+          byStatus: value.byStatus,
+        };
+        return acc;
+      }, {}),
+      yearTotalCents,
+      yearTotal: fromCents(yearTotalCents),
+      yearCount,
     });
   } catch (error) {
     console.error('Error fetching invoice stats:', error);

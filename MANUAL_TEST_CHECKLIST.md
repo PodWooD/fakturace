@@ -1,13 +1,13 @@
 # ✅ Manuální testovací checklist - Systém Fakturace
 
-**URL aplikace:** http://localhost:3003
+**URL aplikace:** http://localhost:3030
 **Testovací účet:** admin@fakturace.cz / admin123
 
 ---
 
 ## 🔐 Test 1: Přihlášení
 
-- [ ] Otevři http://localhost:3003
+- [ ] Otevři http://localhost:3030
 - [ ] Zobrazí se zelená přihlašovací stránka "Fakturační Systém"
 - [ ] Pole Email a Heslo jsou viditelné
 - [ ] Testovací přihlašovací údaje jsou zobrazeny
@@ -36,14 +36,8 @@
 ### Statistické karty
 - [ ] Karta "AKTIVNÍ ORGANIZACE" - zobrazuje číslo
 - [ ] Karta "ZBÝVÁ VYFAKTUROVAT" - zobrazuje číslo (oranžová)
-- [ ] Karta "TENTO MĚSÍC" - zobrazuje částku v Kč (modrá)
-- [ ] Karta "ODPRACOVÁNO" - zobrazuje hodiny (červená)
-
-### Rychlé akce
-- [ ] Tlačítko "📊 Import dat z Excelu" (zelené)
-- [ ] Tlačítko "Vygenerovat faktury" (modré)
-- [ ] Tlačítko "Export do Pohoda XML" (oranžové)
-- [ ] Tlačítko "Měsíční report" (outline)
+- [ ] Karta "PŘEDPOKLÁDANÁ FAKTURACE" - zobrazuje částku v Kč (modrá)
+- [ ] Karta "ODPRACOVANÉ HODINY" - zobrazuje hodiny (červená)
 
 ### Upozornění sekce
 - [ ] Žlutá box s "⚠️ UPOZORNĚNÍ"
@@ -67,7 +61,7 @@
 
 ### Základní zobrazení
 - [ ] Klikni na "🏢 Organizace" v navigaci
-- [ ] **URL:** http://localhost:3003/organizations
+- [ ] **URL:** http://localhost:3030/organizations
 - [ ] Tabulka se zobrazí
 - [ ] Viditelné sloupce: Název, Kód, IČO, DIČ, Adresa, Email, Telefon, Akce
 
@@ -111,7 +105,7 @@
 
 ### Základní zobrazení
 - [ ] Klikni na "⏱️ Výkazy práce"
-- [ ] **URL:** http://localhost:3003/work-records
+- [ ] **URL:** http://localhost:3030/work-records
 - [ ] Tabulka s výkazy se zobrazí
 - [ ] Sloupce: Datum, Pracovník, Organizace, Pobočka, Popis, Čas, Hodiny, Kilometry, Akce
 
@@ -141,13 +135,13 @@
 
 ### Základní zobrazení
 - [ ] Klikni na "📄 Faktury"
-- [ ] **URL:** http://localhost:3003/invoices
+- [ ] **URL:** http://localhost:3030/invoices
 - [ ] Tabulka faktur se zobrazí
 - [ ] Sloupce: Číslo faktury, Organizace, Měsíc/Rok, Částka, Stav, Vytvořeno, Akce
 
 ### Test vytvoření faktury
 - [ ] Klikni "Vytvořit fakturu" nebo "+ Nová faktura"
-- [ ] **URL:** http://localhost:3003/invoices/new
+- [ ] **URL:** http://localhost:3030/invoices/new
 - [ ] Formulář obsahuje:
   - [ ] Výběr organizace *
   - [ ] Výběr měsíce *
@@ -163,7 +157,7 @@
 
 ### Test zobrazení faktury
 - [ ] V seznamu faktur klikni na "Zobrazit" u faktury
-- [ ] **URL:** http://localhost:3003/invoices/[id]
+- [ ] **URL:** http://localhost:3030/invoices/[id]
 - [ ] Zobrazí se detail faktury:
   - [ ] Číslo faktury
   - [ ] Údaje dodavatele
@@ -178,7 +172,7 @@
 
 ### Základní zobrazení
 - [ ] Klikni na "📥 Import dat"
-- [ ] **URL:** http://localhost:3003/import
+- [ ] **URL:** http://localhost:3030/import
 - [ ] Stránka obsahuje:
   - [ ] Informační box s instrukcemi
   - [ ] Input pro výběr souboru
@@ -200,7 +194,7 @@
 
 ### Základní zobrazení
 - [ ] Klikni na "📤 Export"
-- [ ] **URL:** http://localhost:3003/export
+- [ ] **URL:** http://localhost:3030/export
 - [ ] Stránka obsahuje:
   - [ ] Filtr měsíce a roku
   - [ ] Tabulku faktur k exportu
@@ -221,7 +215,7 @@
 
 ### Základní zobrazení
 - [ ] Klikni na "📈 Reporty"
-- [ ] **URL:** http://localhost:3003/reports
+- [ ] **URL:** http://localhost:3030/reports
 - [ ] Stránka obsahuje:
   - [ ] Nadpis "Měsíční report - [měsíc rok]"
   - [ ] Filtry měsíce a roku
@@ -337,7 +331,7 @@
 - [ ] **Očekávaný výsledek:** Validační chyby
 
 ### 404 stránky
-- [ ] Jdi na http://localhost:3003/neexistujici-stranka
+- [ ] Jdi na http://localhost:3030/neexistujici-stranka
 - [ ] **Očekávaný výsledek:** 404 stránka nebo redirect
 
 ---

@@ -4,6 +4,10 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const { PrismaClient } = require('@prisma/client');
 const authMiddleware = require('../middleware/auth');
+const { authorize } = authMiddleware;
+const { toCents } = require('../utils/money');
+const storageService = require('../services/storageService');
+const { logAudit } = require('../services/auditLogger');
 
 const prisma = new PrismaClient();
 
@@ -73,10 +77,27 @@ const upload = multer({
 });
 
 // Import dat z Excel souboru
-router.post('/excel', authMiddleware, upload.single('file'), async (req, res) => {
+router.post('/excel', authMiddleware, authorize('workRecords:write'), upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'Žádný soubor nebyl nahrán' });
+    }
+
+    let storedFile = null;
+    try {
+      const originalExt = (req.file.originalname || '').split('.').pop();
+      storedFile = await storageService.saveFile({
+        buffer: req.file.buffer,
+        prefix: 'imports/excel',
+        extension: originalExt ? `.${originalExt}` : '.xlsx',
+        contentType: req.file.mimetype,
+      });
+    } catch (storageError) {
+      console.error('Import storage error:', storageError);
+      return res.status(500).json({
+        message: 'Soubor se nepodařilo uložit do úložiště',
+        error: storageError.message,
+      });
     }
 
     // Načtení Excel souboru
@@ -171,8 +192,8 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
               name: orgName,
               code: orgCode,
               ico: '00000000', // Výchozí hodnota
-              hourlyRate: 550, // Výchozí hodinová sazba
-              kmRate: 10, // Výchozí sazba za km
+              hourlyRateCents: toCents(550),
+              kilometerRateCents: toCents(10),
               createdBy: req.user.id
             }
           });
@@ -217,8 +238,8 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
                 name: billingOrgMapping.name,
                 code: billingOrgMapping.code,
                 ico: '00000000',
-                hourlyRate: 550,
-                kmRate: 10,
+                hourlyRateCents: toCents(550),
+                kilometerRateCents: toCents(10),
                 createdBy: req.user.id
               }
             });
@@ -261,7 +282,7 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
       }
     }
 
-    res.json({
+    const responsePayload = {
       success: true,
       imported: importedCount,
       organizations: affectedOrganizationIds.size,
@@ -271,8 +292,26 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
         newOrganizations
       },
       newlyCreatedOrganizations,
-      errors: errors
+      errors: errors,
+      fileLocation: storedFile?.location ?? null,
+    };
+
+    await logAudit(prisma, {
+      actorId: req.user?.id,
+      entity: 'ImportExcel',
+      entityId: req.user?.id || 0,
+      action: 'IMPORT',
+      diff: {
+        fileLocation: storedFile?.location ?? null,
+        imported: importedCount,
+        organizations: affectedOrganizationIds.size,
+        skippedRows,
+        newOrganizations,
+        errors,
+      },
     });
+
+    res.json(responsePayload);
 
   } catch (error) {
     console.error('Import error:', error);
@@ -284,7 +323,7 @@ router.post('/excel', authMiddleware, upload.single('file'), async (req, res) =>
 });
 
 // Získání vzorového Excel souboru
-router.get('/template', authMiddleware, (req, res) => {
+router.get('/template', authMiddleware, authorize('workRecords:write'), (req, res) => {
   // Vytvoření vzorového souboru
   const ws_data = [
     ['Datum', 'Organizace', 'Pracovník', 'Popis', 'Hodiny', 'Km'],

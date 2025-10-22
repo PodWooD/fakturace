@@ -1,20 +1,23 @@
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 require('dotenv').config();
+require('./telemetry').start();
 
 const app = express();
-const PORT = process.env.PORT || 3002;
+const PORT = process.env.PORT || 3029;
 
 // Middleware
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3030,http://127.0.0.1:3030')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3030'
+  origin: allowedOrigins,
+  credentials: true
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Statické soubory
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Test route
 app.get('/api/health', (req, res) => {
@@ -31,6 +34,12 @@ app.use('/api/services', require('./routes/services'));
 app.use('/api/hardware', require('./routes/hardware'));
 app.use('/api/received-invoices', require('./routes/receivedInvoices'));
 app.use('/api/billing', require('./routes/billing'));
+app.use('/api/accounting', require('./routes/accounting'));
+app.use('/api/system', require('./routes/system'));
+app.use('/api/audit', require('./routes/audit'));
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/metrics', require('./routes/metrics'));
+app.use('/api/users', require('./routes/users'));
 
 // Error handling
 app.use((err, req, res, next) => {
