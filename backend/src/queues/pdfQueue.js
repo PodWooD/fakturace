@@ -3,22 +3,24 @@ const PDFGenerator = require('../services/pdfGenerator');
 const storageService = require('../services/storageService');
 
 const pdfGenerator = new PDFGenerator();
+const QUEUE_NAME = 'invoice-pdf';
 
 let queue = null;
 let queueEvents = null;
 let readyPromise = null;
 let eventsReadyPromise = null;
+let scheduler = null;
 
 if (redisEnabled && connection) {
-  queue = new Queue('invoice:pdf', { connection });
-  const scheduler = new QueueScheduler('invoice:pdf', { connection });
-  readyPromise = scheduler.waitUntilReady();
-  queueEvents = new QueueEvents('invoice:pdf', { connection });
+  queue = new Queue(QUEUE_NAME, { connection });
+  scheduler = new QueueScheduler(QUEUE_NAME, { connection });
+  readyPromise = Promise.all([queue.waitUntilReady(), scheduler.waitUntilReady()]);
+  queueEvents = new QueueEvents(QUEUE_NAME, { connection });
   eventsReadyPromise = queueEvents.waitUntilReady();
   queueEvents.on('error', (error) => console.error('[Queues] PDF queue events error:', error));
 
   const worker = new Worker(
-    'invoice:pdf',
+    QUEUE_NAME,
     async (job) => {
       const { invoice, organization, workRecords, services, hardware } = job.data;
       const stored = await pdfGenerator.saveInvoicePDF(

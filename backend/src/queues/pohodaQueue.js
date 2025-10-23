@@ -2,22 +2,24 @@ const { Queue, Worker, QueueScheduler, QueueEvents, connection, redisEnabled } =
 const PohodaExport = require('../services/pohodaExport');
 
 const pohodaExport = new PohodaExport();
+const QUEUE_NAME = 'invoice-pohoda';
 
 let queue = null;
 let queueEvents = null;
 let readyPromise = null;
 let eventsReadyPromise = null;
+let scheduler = null;
 
 if (redisEnabled && connection) {
-  queue = new Queue('invoice:pohoda', { connection });
-  const scheduler = new QueueScheduler('invoice:pohoda', { connection });
-  readyPromise = scheduler.waitUntilReady();
-  queueEvents = new QueueEvents('invoice:pohoda', { connection });
+  queue = new Queue(QUEUE_NAME, { connection });
+  scheduler = new QueueScheduler(QUEUE_NAME, { connection });
+  readyPromise = Promise.all([queue.waitUntilReady(), scheduler.waitUntilReady()]);
+  queueEvents = new QueueEvents(QUEUE_NAME, { connection });
   eventsReadyPromise = queueEvents.waitUntilReady();
   queueEvents.on('error', (error) => console.error('[Queues] Pohoda queue events error:', error));
 
   const worker = new Worker(
-    'invoice:pohoda',
+    QUEUE_NAME,
     async (job) => {
       const { invoice, organization, workRecords, services, hardware } = job.data;
       const stored = await pohodaExport.savePohodaXML(

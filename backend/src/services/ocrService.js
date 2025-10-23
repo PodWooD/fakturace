@@ -2,6 +2,8 @@ const DEFAULT_OCR_URL = process.env.MISTRAL_OCR_URL || 'https://api.mistral.ai/v
 const DEFAULT_FILES_URL = process.env.MISTRAL_FILES_URL || 'https://api.mistral.ai/v1/files';
 const DEFAULT_OCR_MODEL = process.env.MISTRAL_OCR_MODEL || 'mistral-ocr-latest';
 
+let pdfParseAdapter = null;
+
 const ensureArray = (value) => (Array.isArray(value) ? value : value ? [value] : []);
 
 const extractReferenceProductCode = (itemName = '', description = '') => {
@@ -134,6 +136,167 @@ const mapCurrency = (value) => {
   if (normalized === 'PLN' || normalized === 'ZL' || normalized === 'ZLOTY') return 'PLN';
   if (/^[A-Z]{3}$/.test(normalized)) return normalized;
   return 'CZK';
+};
+
+const stripDiacritics = (value = '') =>
+  value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+const tryInitPdfParser = () => {
+  if (!pdfParseAdapter) {
+    try {
+      // Lazy load pdf-parse, protože jej potřebujeme jen při lokálním fallbacku.
+      // eslint-disable-next-line global-require
+      const pdfModule = require('pdf-parse');
+      if (pdfModule && typeof pdfModule.PDFParse === 'function') {
+        pdfParseAdapter = { mode: 'class', ctor: pdfModule.PDFParse };
+      } else if (typeof pdfModule === 'function') {
+        pdfParseAdapter = { mode: 'function', fn: pdfModule };
+      } else {
+        pdfParseAdapter = null;
+      }
+    } catch (error) {
+      console.warn('[OCR] pdf-parse není dostupné, lokální fallback nelze použít:', error.message);
+      pdfParseAdapter = null;
+    }
+  }
+  return pdfParseAdapter;
+};
+
+const extractFirstMatch = (text, patterns = []) => {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return match[1] || match[0];
+    }
+  }
+  return null;
+};
+
+const normalizeLines = (text) =>
+  text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length);
+
+const attemptLocalPdfParse = async ({ buffer, filename, mimetype }) => {
+  const parserAdapter = tryInitPdfParser();
+  if (!parserAdapter || !buffer || !buffer.length) {
+    return null;
+  }
+
+  if (mimetype && !/pdf$/i.test(mimetype) && !mimetype.includes('pdf')) {
+    return null;
+  }
+  if (!mimetype && filename) {
+    const lower = filename.toLowerCase();
+    if (!lower.endsWith('.pdf')) {
+      return null;
+    }
+  }
+
+  try {
+    let rawText = '';
+    if (parserAdapter.mode === 'class') {
+      const parserInstance = new parserAdapter.ctor({ data: buffer });
+      const parsed = await parserInstance.getText();
+      rawText = (parsed?.text || '').replace(/\r/g, '\n');
+    } else if (parserAdapter.mode === 'function') {
+      const parsed = await parserAdapter.fn(buffer);
+      rawText = (parsed?.text || '').replace(/\r/g, '\n');
+    } else {
+      return null;
+    }
+
+    const trimmed = rawText.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const lines = normalizeLines(trimmed);
+    const linesWithPlain = lines.map((line) => {
+      const withoutDiacritics = stripDiacritics(line);
+      return {
+        original: line,
+        plain: withoutDiacritics.toLowerCase(),
+      };
+    });
+
+    const joined = trimmed.replace(/\s+/g, ' ');
+
+    const invoiceFromLines =
+      lines
+        .map((line) =>
+          extractFirstMatch(line, [
+            /\b([A-Z]{2,10}[-\/]\d{2,8}(?:[-\/]\d{2,4})?)\b/,
+            /\b(\d{2,8}[-\/]?[A-Z]{2,10})\b/,
+          ]),
+        )
+        .find((value) => value && /\d/.test(value));
+
+    const invoiceNumber =
+      invoiceFromLines ||
+      extractFirstMatch(joined, [
+        /Faktura[^A-Z0-9]{0,20}([A-Z]{2,10}[-\/]\d{2,8}(?:[-\/]\d{2,4})?)/i,
+        /Invoice[^A-Z0-9]{0,20}([A-Z]{2,10}[-\/]\d{2,8}(?:[-\/]\d{2,4})?)/i,
+      ]) || `TMP-${Date.now()}`;
+
+    const issueDate =
+      extractFirstMatch(joined, [
+        /\b(\d{1,2}\.\d{1,2}\.\d{4})\b/,
+        /\b(20\d{2}-\d{2}-\d{2})\b/,
+      ]) || null;
+
+    const currency =
+      extractFirstMatch(joined, [/\b(CZK|Kč|EUR|USD|GBP|PLN)\b/i]) || 'CZK';
+
+    const totalWithVat =
+      parseLocalizedNumber(
+        extractFirstMatch(joined, [
+          /Celkem\s*[:#-]?\s*([-0-9\s,]+)\s*(?:CZK|Kč|EUR|USD|GBP|PLN)?/i,
+          /Total\s*[:#-]?\s*([-0-9\s,]+)\s*(?:CZK|Kč|EUR|USD|GBP|PLN)?/i,
+        ]),
+      ) || null;
+
+    const supplierLine =
+      linesWithPlain.find((entry) => entry.plain.startsWith('dodavatel') || entry.plain.startsWith('supplier')) ||
+      linesWithPlain.find((entry) => entry.plain.includes('dodavatel') || entry.plain.includes('supplier'));
+    const supplierName = supplierLine
+      ? supplierLine.original.replace(/^[^:]*[:#-]?\s*/, '').trim() || supplierLine.original.trim()
+      : lines[0] || 'Neznámý dodavatel';
+    const cleanSupplierName = supplierName.length ? supplierName : 'Neznámý dodavatel';
+
+    const descriptionSnippet = lines.slice(0, 25).join(' ').slice(0, 500);
+
+    const items = [
+      {
+        itemName: 'Importovaná položka',
+        description:
+          descriptionSnippet ||
+          `Obsah souboru ${filename || 'invoice.pdf'} nebyl plně analyzován.`,
+        quantity: 1,
+        unitPrice: totalWithVat || 0,
+        totalPrice: totalWithVat || 0,
+        vatRate: 0,
+      },
+    ];
+
+    return {
+      supplierName: cleanSupplierName,
+      supplierIco: extractFirstMatch(joined, [/IČ[:\s]*([0-9]{6,10})/i]) || null,
+      invoiceNumber,
+      issueDate: issueDate ? toIsoDate(issueDate) : null,
+      currency: mapCurrency(currency),
+      totalWithoutVat: null,
+      totalWithVat,
+      items,
+      ocrSource: 'LOCAL_FALLBACK',
+    };
+  } catch (error) {
+    console.error('[OCR] Lokální parsování PDF selhalo:', error.message);
+    return null;
+  }
 };
 
 const parseInvoiceFromPages = (pages = []) => {
@@ -317,107 +480,120 @@ const normalizeResponse = (payload) => {
 async function callMistralOcr({ buffer, filename, mimetype }) {
   const apiKey = process.env.MISTRAL_OCR_API_KEY || process.env.MISTRAL_API_KEY;
 
-  if (!apiKey) {
-    console.warn('[OCR] MISTRAL_OCR_API_KEY není nastaven, vracím mock data.');
-    return parseMockInvoice('MISTRAL_OCR_API_KEY není nastaven');
-  }
-
   if (!buffer) {
     throw new Error('OCR vyžaduje binární obsah souboru.');
   }
 
-  const uploadForm = new FormData();
-  const detectedMime = mimetype || 'application/pdf';
-  const blob = new Blob([buffer], { type: detectedMime });
-  uploadForm.append('file', blob, filename || 'invoice.pdf');
-  uploadForm.append('purpose', 'ocr');
-
-  console.info('[OCR] Odesílám soubor do Mistral files API', {
-    endpoint: DEFAULT_FILES_URL,
-    filename,
-    mimetype: detectedMime,
-    size: buffer.length,
-  });
-
-  const uploadResponse = await fetch(DEFAULT_FILES_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: uploadForm,
-  });
-
-  if (!uploadResponse.ok) {
-    const text = await uploadResponse.text().catch(() => uploadResponse.statusText);
-    throw new Error(`Mistral files API vrátilo chybu ${uploadResponse.status}: ${text}`);
+  if (!apiKey) {
+    console.warn('[OCR] MISTRAL_OCR_API_KEY není nastaven, používám lokální fallback.');
+    const fallback = await attemptLocalPdfParse({ buffer, filename, mimetype });
+    if (fallback) {
+      return fallback;
+    }
+    return parseMockInvoice('MISTRAL_OCR_API_KEY není nastaven');
   }
 
-  const uploaded = await uploadResponse.json();
-  console.info('[OCR] Soubor úspěšně nahrán', uploaded);
+  try {
+    const uploadForm = new FormData();
+    const detectedMime = mimetype || 'application/pdf';
+    const blob = new Blob([buffer], { type: detectedMime });
+    uploadForm.append('file', blob, filename || 'invoice.pdf');
+    uploadForm.append('purpose', 'ocr');
 
-  if (!uploaded?.id) {
-    throw new Error('Files API nevrátilo file_id');
+    console.info('[OCR] Odesílám soubor do Mistral files API', {
+      endpoint: DEFAULT_FILES_URL,
+      filename,
+      mimetype: detectedMime,
+      size: buffer.length,
+    });
+
+    const uploadResponse = await fetch(DEFAULT_FILES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: uploadForm,
+    });
+
+    if (!uploadResponse.ok) {
+      const text = await uploadResponse.text().catch(() => uploadResponse.statusText);
+      throw new Error(`Mistral files API vrátilo chybu ${uploadResponse.status}: ${text}`);
+    }
+
+    const uploaded = await uploadResponse.json();
+    console.info('[OCR] Soubor úspěšně nahrán', uploaded);
+
+    if (!uploaded?.id) {
+      throw new Error('Files API nevrátilo file_id');
+    }
+
+    const signedUrlResponse = await fetch(`${DEFAULT_FILES_URL}/${uploaded.id}/url?expiry=24`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!signedUrlResponse.ok) {
+      const text = await signedUrlResponse.text().catch(() => signedUrlResponse.statusText);
+      throw new Error(`Mistral files url API vrátilo chybu ${signedUrlResponse.status}: ${text}`);
+    }
+
+    const signedUrlPayload = await signedUrlResponse.json();
+    if (!signedUrlPayload?.url) {
+      throw new Error('Files API nevrátilo podepsaný URL');
+    }
+
+    const isImage = (detectedMime || '').startsWith('image/');
+    const documentPayload = isImage
+      ? { type: 'image_url', image_url: signedUrlPayload.url }
+      : { type: 'document_url', document_url: signedUrlPayload.url };
+
+    const requestPayload = {
+      model: DEFAULT_OCR_MODEL,
+      document: documentPayload,
+    };
+
+    if (isImage) {
+      requestPayload.include_image_base64 = true;
+    }
+
+    console.info('[OCR] Odesílám požadavek do Mistral OCR', {
+      endpoint: DEFAULT_OCR_URL,
+      fileId: uploaded.id,
+      documentType: documentPayload.type,
+    });
+
+    const response = await fetch(DEFAULT_OCR_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestPayload),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => response.statusText);
+      throw new Error(`OCR služba vrátila chybu ${response.status}: ${text}`);
+    }
+
+    const responsePayload = await response.json();
+    console.info('[OCR] Mistral OCR úspěšně odpověděl', {
+      hasInvoice: Boolean(responsePayload?.invoice || responsePayload?.document),
+      items: Array.isArray(responsePayload?.items) ? responsePayload.items.length : undefined,
+      pages: Array.isArray(responsePayload?.pages) ? responsePayload.pages.length : undefined,
+    });
+    return normalizeResponse(responsePayload);
+  } catch (error) {
+    console.error('[OCR] Chyba při volání Mistral OCR, zkouším lokální fallback:', error.message);
+    const fallback = await attemptLocalPdfParse({ buffer, filename, mimetype });
+    if (fallback) {
+      return fallback;
+    }
+    throw error;
   }
-
-  const signedUrlResponse = await fetch(`${DEFAULT_FILES_URL}/${uploaded.id}/url?expiry=24`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: 'application/json',
-    },
-  });
-
-  if (!signedUrlResponse.ok) {
-    const text = await signedUrlResponse.text().catch(() => signedUrlResponse.statusText);
-    throw new Error(`Mistral files url API vrátilo chybu ${signedUrlResponse.status}: ${text}`);
-  }
-
-  const signedUrlPayload = await signedUrlResponse.json();
-  if (!signedUrlPayload?.url) {
-    throw new Error('Files API nevrátilo podepsaný URL');
-  }
-
-  const isImage = (detectedMime || '').startsWith('image/');
-  const documentPayload = isImage
-    ? { type: 'image_url', image_url: signedUrlPayload.url }
-    : { type: 'document_url', document_url: signedUrlPayload.url };
-
-  const requestPayload = {
-    model: DEFAULT_OCR_MODEL,
-    document: documentPayload,
-  };
-
-  if (isImage) {
-    requestPayload.include_image_base64 = true;
-  }
-
-  console.info('[OCR] Odesílám požadavek do Mistral OCR', {
-    endpoint: DEFAULT_OCR_URL,
-    fileId: uploaded.id,
-    documentType: documentPayload.type,
-  });
-
-  const response = await fetch(DEFAULT_OCR_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestPayload),
-  });
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => response.statusText);
-    throw new Error(`OCR služba vrátila chybu ${response.status}: ${text}`);
-  }
-
-  const responsePayload = await response.json();
-  console.info('[OCR] Mistral OCR úspěšně odpověděl', {
-    hasInvoice: Boolean(responsePayload?.invoice || responsePayload?.document),
-    items: Array.isArray(responsePayload?.items) ? responsePayload.items.length : undefined,
-    pages: Array.isArray(responsePayload?.pages) ? responsePayload.pages.length : undefined,
-  });
-  return normalizeResponse(responsePayload);
 }
 
 async function parseInvoice({ buffer, filename, mimetype } = {}) {

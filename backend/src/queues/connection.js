@@ -1,4 +1,23 @@
-const { Queue, Worker, QueueScheduler, QueueEvents } = require('bullmq');
+const bullmq = require('bullmq');
+
+const { Queue, Worker, QueueEvents } = bullmq;
+const QueueScheduler =
+  bullmq.QueueScheduler ||
+  class QueueSchedulerCompat {
+    constructor(name, opts = {}) {
+      this.name = name;
+      this.opts = opts;
+      this.ready = Promise.resolve();
+    }
+    waitUntilReady() {
+      return this.ready;
+    }
+    async addDelayed() {}
+    async close() {}
+    async close() {
+      // nothing to clean up for compatibility scheduler
+    }
+  };
 
 const redisEnabled = Boolean(process.env.REDIS_HOST || process.env.REDIS_URL);
 

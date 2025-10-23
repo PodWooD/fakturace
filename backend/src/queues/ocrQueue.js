@@ -2,28 +2,30 @@ const { Queue, Worker, QueueScheduler, QueueEvents, connection, redisEnabled } =
 const storageService = require('../services/storageService');
 const { parseInvoice } = require('../services/ocrService');
 
+const OCR_MAX_ATTEMPTS = parseInt(process.env.OCR_MAX_ATTEMPTS || '3', 10);
+const OCR_BACKOFF_MS = parseInt(process.env.OCR_RETRY_BACKOFF_MS || '5000', 10);
+const QUEUE_NAME = 'ocr-process';
+
 let queue = null;
 let queueEvents = null;
 let readyPromise = null;
 let eventsReadyPromise = null;
-
-const OCR_MAX_ATTEMPTS = parseInt(process.env.OCR_MAX_ATTEMPTS || '3', 10);
-const OCR_BACKOFF_MS = parseInt(process.env.OCR_RETRY_BACKOFF_MS || '5000', 10);
+let scheduler = null;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 if (redisEnabled && connection) {
-  queue = new Queue('ocr:process', { connection });
-  const scheduler = new QueueScheduler('ocr:process', { connection });
-  readyPromise = scheduler.waitUntilReady();
-  queueEvents = new QueueEvents('ocr:process', { connection });
+  queue = new Queue(QUEUE_NAME, { connection });
+  scheduler = new QueueScheduler(QUEUE_NAME, { connection });
+  readyPromise = Promise.all([queue.waitUntilReady(), scheduler.waitUntilReady()]);
+  queueEvents = new QueueEvents(QUEUE_NAME, { connection });
   eventsReadyPromise = queueEvents.waitUntilReady();
   queueEvents.on('error', (error) => {
     console.error('[Queues] OCR queue events error:', error);
   });
 
   const worker = new Worker(
-    'ocr:process',
+    QUEUE_NAME,
     async (job) => {
       const { sourceLocation, filename, mimetype } = job.data;
       const buffer = await storageService.getFileBuffer(sourceLocation);

@@ -1,27 +1,21 @@
-const {
-  Queue,
-  Worker,
-  QueueScheduler,
-  QueueEvents,
-  connection,
-  redisEnabled,
-} = require('./connection');
+const { Queue, Worker, QueueScheduler, QueueEvents, connection, redisEnabled } = require('./connection');
 const { PrismaClient } = require('@prisma/client');
 const { createNotification } = require('../services/notificationService');
 
-const queueName = 'notifications:dispatch';
+const queueName = 'notifications-dispatch';
 
 let queue = null;
 let queueEvents = null;
 let readyPromise = null;
 let eventsReadyPromise = null;
+let scheduler = null;
 
 const prisma = new PrismaClient();
 
 if (redisEnabled && connection) {
   queue = new Queue(queueName, { connection });
-  const scheduler = new QueueScheduler(queueName, { connection });
-  readyPromise = scheduler.waitUntilReady();
+  scheduler = new QueueScheduler(queueName, { connection });
+  readyPromise = Promise.all([queue.waitUntilReady(), scheduler.waitUntilReady()]);
   queueEvents = new QueueEvents(queueName, { connection });
   eventsReadyPromise = queueEvents.waitUntilReady();
   queueEvents.on('error', (error) => {

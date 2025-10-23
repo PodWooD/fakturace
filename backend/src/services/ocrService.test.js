@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const PDFDocument = require('pdfkit');
 
 const originalFetch = globalThis.fetch;
 const originalKey = process.env.MISTRAL_OCR_API_KEY;
@@ -165,4 +166,49 @@ Datum vystavení: 17.09.2025
   assert.equal(result.totalWithVat, 3025);
   assert.equal(result.totalWithoutVat, 2500);
   assert.equal(result.issueDate, '2025-09-17T00:00:00.000Z');
+});
+
+test('Lokální OCR fallback vytěží základní data když chybí API klíč', async (t) => {
+  const originalKey = process.env.MISTRAL_OCR_API_KEY;
+  delete process.env.MISTRAL_OCR_API_KEY;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => {
+    throw new Error('Fetch should not be volán při lokálním fallbacku');
+  };
+
+  t.after(() => {
+    if (originalKey === undefined) {
+      delete process.env.MISTRAL_OCR_API_KEY;
+    } else {
+      process.env.MISTRAL_OCR_API_KEY = originalKey;
+    }
+    globalThis.fetch = originalFetch;
+    delete require.cache[require.resolve('./ocrService')];
+  });
+
+  const createSamplePdf = () =>
+    new Promise((resolve) => {
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.fontSize(16).text('Faktura č.: INV-123');
+      doc.fontSize(12).text('Dodavatel: Lokální Dodavatel s.r.o.');
+      doc.text('Datum vystavení: 17.09.2025');
+      doc.text('Celkem: 1 210,00 Kč');
+      doc.end();
+    });
+
+  const buffer = await createSamplePdf();
+
+  delete require.cache[require.resolve('./ocrService')];
+  const { parseInvoice } = require('./ocrService');
+
+  const result = await parseInvoice({ buffer, filename: 'local-fallback.pdf', mimetype: 'application/pdf' });
+
+  assert.equal(result.__mock, undefined);
+  assert.equal(result.ocrSource, 'LOCAL_FALLBACK');
+  assert.equal(result.invoiceNumber, 'INV-123');
+  assert.ok(result.supplierName.includes('Lokální Dodavatel'));
+  assert.ok(Array.isArray(result.items) && result.items.length > 0);
 });
