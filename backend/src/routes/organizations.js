@@ -6,6 +6,7 @@ const authMiddleware = require('../middleware/auth');
 const { authorize } = authMiddleware;
 const { toCents, fromCents } = require('../utils/money');
 const { logAudit } = require('../services/auditLogger');
+const { getCompanyByICO, validateICO } = require('../services/aresService');
 
 const prisma = new PrismaClient();
 
@@ -412,6 +413,34 @@ router.get('/:id/stats', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error fetching organization stats:', error);
     res.status(500).json({ error: 'Chyba při načítání statistik' });
+  }
+});
+
+// GET načtení údajů z ARES podle IČO
+router.get('/ares/:ico', authMiddleware, async (req, res) => {
+  try {
+    const { ico } = req.params;
+
+    // Validace IČO
+    if (!validateICO(ico)) {
+      return res.status(400).json({
+        error: 'Neplatné IČO. IČO musí obsahovat 8 číslic.',
+      });
+    }
+
+    // Načtení dat z ARES
+    const result = await getCompanyByICO(ico);
+
+    if (!result.success) {
+      return res.status(404).json({
+        error: result.error,
+      });
+    }
+
+    res.json(result.data);
+  } catch (error) {
+    console.error('Error fetching ARES data:', error);
+    res.status(500).json({ error: 'Chyba při načítání dat z ARES' });
   }
 });
 

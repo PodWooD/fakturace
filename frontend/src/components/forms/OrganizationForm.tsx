@@ -1,17 +1,23 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import {
+  ActionIcon,
   Button,
   Group,
   NumberInput,
   Stack,
   Switch,
   TextInput,
+  Tooltip,
+  Notification,
 } from '@mantine/core';
+import { IconSearch, IconCheck, IconX } from '@tabler/icons-react';
+import { useAuth } from '@/lib/auth-context';
+import { createApiClient } from '@/lib/api-client';
 
 const schema = z.object({
   name: z.string().min(1, 'Název je povinný'),
@@ -45,11 +51,21 @@ export const OrganizationForm = ({
   submitLabel = 'Uložit organizaci',
   isSubmitting = false,
 }: OrganizationFormProps) => {
+  const [aresLoading, setAresLoading] = useState(false);
+  const [aresMessage, setAresMessage] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+
+  const { token } = useAuth();
+  const api = useMemo(() => createApiClient(token || undefined), [token]);
+
   const {
     register,
     handleSubmit,
     setValue,
     control,
+    watch,
     formState: { errors },
   } = useForm<OrganizationFormValues>({
     resolver: zodResolver(schema),
@@ -72,6 +88,44 @@ export const OrganizationForm = ({
     },
   });
 
+  const icoValue = watch('ico');
+
+  // Funkce pro načtení dat z ARES
+  const handleLoadFromAres = async () => {
+    if (!icoValue || icoValue.trim().length === 0) {
+      setAresMessage({ type: 'error', text: 'Zadejte IČO' });
+      setTimeout(() => setAresMessage(null), 3000);
+      return;
+    }
+
+    setAresLoading(true);
+    setAresMessage(null);
+
+    try {
+      const response = await api.get(`/organizations/ares/${icoValue.trim()}`);
+      const data = response.data;
+
+      // Automatické vyplnění polí z ARES
+      if (data.name) setValue('name', data.name);
+      if (data.address) setValue('address', data.address);
+      if (data.ico) setValue('ico', data.ico);
+      if (data.dic) setValue('dic', data.dic);
+
+      setAresMessage({
+        type: 'success',
+        text: 'Údaje úspěšně načteny z ARES',
+      });
+
+      setTimeout(() => setAresMessage(null), 5000);
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.error || 'Chyba při načítání z ARES';
+      setAresMessage({ type: 'error', text: errorMsg });
+      setTimeout(() => setAresMessage(null), 5000);
+    } finally {
+      setAresLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (defaultValues) {
       (Object.keys(defaultValues) as Array<keyof OrganizationFormValues>).forEach((key) => {
@@ -86,6 +140,16 @@ export const OrganizationForm = ({
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
       <Stack gap="sm">
+        {aresMessage && (
+          <Notification
+            color={aresMessage.type === 'success' ? 'green' : 'red'}
+            icon={aresMessage.type === 'success' ? <IconCheck size={18} /> : <IconX size={18} />}
+            onClose={() => setAresMessage(null)}
+            withCloseButton
+          >
+            {aresMessage.text}
+          </Notification>
+        )}
         <TextInput label="Název" withAsterisk {...register('name')} error={errors.name?.message} />
         <Group grow align="flex-start">
           <TextInput label="Kód" {...register('code')} error={errors.code?.message} />
@@ -101,7 +165,24 @@ export const OrganizationForm = ({
         </Group>
         <TextInput label="Adresa" {...register('address')} error={errors.address?.message} />
         <Group grow align="flex-start">
-          <TextInput label="IČO" {...register('ico')} error={errors.ico?.message} />
+          <TextInput
+            label="IČO"
+            {...register('ico')}
+            error={errors.ico?.message}
+            rightSection={
+              <Tooltip label="Načíst údaje z ARES" position="top">
+                <ActionIcon
+                  variant="subtle"
+                  color="blue"
+                  onClick={handleLoadFromAres}
+                  loading={aresLoading}
+                  disabled={!icoValue || icoValue.trim().length === 0}
+                >
+                  <IconSearch size={18} />
+                </ActionIcon>
+              </Tooltip>
+            }
+          />
           <TextInput label="DIČ" {...register('dic')} error={errors.dic?.message} />
         </Group>
         <Group grow align="flex-start">
