@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -46,7 +46,10 @@ export default function WorkRecordsPage() {
   const { token, user } = useAuth();
   const api = useMemo(() => createApiClient(token || undefined), [token]);
   const queryClient = useQueryClient();
-  const canWrite = hasPermission(user?.role as UserRole, 'workRecords:write');
+  const role = user?.role as UserRole;
+  const canWrite = hasPermission(role, 'workRecords:write');
+  const isTechnician = role === 'TECHNICIAN';
+  const lockedWorkerName = isTechnician ? user?.name || user?.email || '' : undefined;
 
   const [filters, setFilters] = useState({
     month: now.month() + 1,
@@ -58,6 +61,13 @@ export default function WorkRecordsPage() {
   const [pagination, setPagination] = useState({ page: 1, limit: 25 });
   const [formOpened, setFormOpened] = useState(false);
   const [editingRecord, setEditingRecord] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (isTechnician) {
+      const technicianName = lockedWorkerName || '';
+      setFilters((prev) => (prev.worker === technicianName ? prev : { ...prev, worker: technicianName }));
+    }
+  }, [isTechnician, lockedWorkerName]);
 
   const organizationsQuery = useQuery<Option[]>({
     queryKey: ['work-records-organizations'],
@@ -92,6 +102,9 @@ export default function WorkRecordsPage() {
         organizationId: Number(values.organizationId),
         billingOrgId: values.billingOrgId ? Number(values.billingOrgId) : undefined,
       };
+      if (isTechnician && lockedWorkerName) {
+        payload.worker = lockedWorkerName;
+      }
       if (id) {
         await api.put(`/work-records/${id}`, payload);
       } else {
@@ -267,14 +280,19 @@ export default function WorkRecordsPage() {
             />
             <TextInput
               label="Technik"
-              placeholder="Filtrovat podle jména"
+              placeholder={isTechnician ? undefined : 'Filtrovat podle jména'}
               value={filters.worker}
-              onChange={(event) =>
+              readOnly={isTechnician}
+              disabled={isTechnician}
+              onChange={(event) => {
+                if (isTechnician) {
+                  return;
+                }
                 setFilters((prev) => {
                   setPagination((paginationPrev) => ({ ...paginationPrev, page: 1 }));
                   return { ...prev, worker: event.currentTarget.value };
-                })
-              }
+                });
+              }}
             />
           </Group>
           <Text size="xs" c="dimmed">
@@ -418,9 +436,26 @@ export default function WorkRecordsPage() {
       >
         <WorkRecordForm
           organizations={organizationsOptions}
-          defaultValues={editingRecord ?? { date: new Date(), worker: '', minutes: 60, kilometers: 0, organizationId: '' }}
-          onSubmit={(values) => upsertMutation.mutateAsync({ values, id: editingRecord?.id })}
+          defaultValues={
+            editingRecord
+              ? { ...editingRecord, worker: editingRecord.worker || lockedWorkerName || '' }
+              : {
+                  date: new Date(),
+                  worker: lockedWorkerName || '',
+                  minutes: 60,
+                  kilometers: 0,
+                  organizationId: '',
+                }
+          }
+          onSubmit={(values) =>
+            upsertMutation.mutateAsync({
+              values: isTechnician && lockedWorkerName ? { ...values, worker: lockedWorkerName } : values,
+              id: editingRecord?.id,
+            })
+          }
           isSubmitting={upsertMutation.isPending}
+          lockedWorkerName={lockedWorkerName}
+          isWorkerLocked={isTechnician}
         />
       </Modal>
     </Stack>

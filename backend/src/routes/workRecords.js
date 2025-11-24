@@ -10,6 +10,41 @@ const { logAudit } = require('../services/auditLogger');
 
 const prisma = new PrismaClient();
 
+const isTechnician = (user) => user?.role === 'TECHNICIAN';
+
+const resolveTechnicianName = (user) => {
+  if (!user) {
+    return 'Technik';
+  }
+  if (user.name && typeof user.name === 'string' && user.name.trim()) {
+    return user.name.trim();
+  }
+  if (user.email && typeof user.email === 'string') {
+    return user.email.trim();
+  }
+  return 'Technik';
+};
+
+const ensureTechnicianOwnership = (user, record) => {
+  if (!isTechnician(user)) {
+    return;
+  }
+
+  const technicianName = resolveTechnicianName(user);
+  const ownsByUserId = Boolean(record.userId && user?.id && record.userId === user.id);
+  const ownsByName = Boolean(
+    technicianName &&
+    record.worker &&
+    record.worker.toLowerCase() === technicianName.toLowerCase(),
+  );
+
+  if (!ownsByUserId && !ownsByName) {
+    const error = new Error('Technici mohou pracovat pouze se svými záznamy');
+    error.code = 'TECHNICIAN_FORBIDDEN';
+    throw error;
+  }
+};
+
 const mapOrganization = (organization) => {
   if (!organization) {
     return null;
@@ -150,12 +185,48 @@ router.get('/', authMiddleware, async (req, res) => {
     } = req.query;
 
     const where = {};
+    const andConditions = [];
 
-    if (month) where.month = parseInt(month, 10);
-    if (year) where.year = parseInt(year, 10);
-    if (organizationId) where.organizationId = parseInt(organizationId, 10);
-    if (worker) where.worker = { contains: worker, mode: 'insensitive' };
-    if (status) where.status = status;
+    const monthNumber = parseInt(month, 10);
+    if (!Number.isNaN(monthNumber)) {
+      where.month = monthNumber;
+    }
+
+    const yearNumber = parseInt(year, 10);
+    if (!Number.isNaN(yearNumber)) {
+      where.year = yearNumber;
+    }
+
+    const organizationNumber = parseInt(organizationId, 10);
+    if (!Number.isNaN(organizationNumber)) {
+      where.organizationId = organizationNumber;
+    }
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (worker) {
+      andConditions.push({ worker: { contains: worker, mode: 'insensitive' } });
+    }
+
+    if (isTechnician(req.user)) {
+      const technicianName = resolveTechnicianName(req.user);
+      const technicianFilters = [];
+      if (req.user?.id) {
+        technicianFilters.push({ userId: req.user.id });
+      }
+      if (technicianName) {
+        technicianFilters.push({ worker: { equals: technicianName, mode: 'insensitive' } });
+      }
+      if (technicianFilters.length) {
+        andConditions.push({ OR: technicianFilters });
+      }
+    }
+
+    if (andConditions.length) {
+      where.AND = andConditions;
+    }
 
     const total = await prisma.workRecord.count({ where });
 
@@ -205,6 +276,9 @@ router.post('/bulk', authMiddleware, authorize('workRecords:write'), async (req,
 
     for (let index = 0; index < records.length; index += 1) {
       const payload = records[index];
+      if (isTechnician(req.user)) {
+        payload.worker = resolveTechnicianName(req.user) || payload.worker;
+      }
       try {
         const organizationId = parseInt(payload.organizationId, 10);
         if (!organizationId) {
@@ -290,6 +364,9 @@ router.post('/bulk', authMiddleware, authorize('workRecords:write'), async (req,
 // GET souhrn práce za měsíc (musí být před /:id)
 router.get('/summary/:year/:month', authMiddleware, async (req, res) => {
   try {
+    if (isTechnician(req.user)) {
+      return res.status(403).json({ error: 'Nedostatečná oprávnění' });
+    }
     const { year, month } = req.params;
     const { groupBy = 'billing' } = req.query;
 
@@ -397,6 +474,9 @@ router.get('/summary/:year/:month', authMiddleware, async (req, res) => {
 // GET dostupné měsíce s daty (musí být před /:id)
 router.get('/available-months', authMiddleware, async (req, res) => {
   try {
+    if (isTechnician(req.user)) {
+      return res.status(403).json({ error: 'Nedostatečná oprávnění' });
+    }
     const months = await prisma.workRecord.groupBy({
       by: ['month', 'year'],
       _count: {
@@ -486,7 +566,10 @@ const buildWorkRecordPayload = async (payload, authorId) => {
 // POST vytvoření záznamu
 router.post('/', authMiddleware, authorize('workRecords:write'), async (req, res) => {
   try {
-    const payload = await buildWorkRecordPayload(req.body, req.user?.id);
+    const requestBody = isTechnician(req.user)
+      ? { ...req.body, worker: resolveTechnicianName(req.user) || req.body.worker }
+      : req.body;
+    const payload = await buildWorkRecordPayload(requestBody, req.user?.id);
 
     const record = await prisma.workRecord.create({
       data: payload,
@@ -533,11 +616,19 @@ router.put('/:id', authMiddleware, authorize('workRecords:write'), async (req, r
       return res.status(404).json({ error: 'Záznam nenalezen' });
     }
 
+    ensureTechnicianOwnership(req.user, existing);
+
+    const mergedPayload = {
+      ...existing,
+      ...req.body,
+    };
+
+    if (isTechnician(req.user)) {
+      mergedPayload.worker = resolveTechnicianName(req.user) || existing.worker;
+    }
+
     const updatedPayload = await buildWorkRecordPayload(
-      {
-        ...existing,
-        ...req.body,
-      },
+      mergedPayload,
       existing.userId || req.user?.id,
     );
 
@@ -571,6 +662,9 @@ router.put('/:id', authMiddleware, authorize('workRecords:write'), async (req, r
     if (error.code === 'PERIOD_LOCKED') {
       return res.status(423).json({ error: error.message });
     }
+    if (error.code === 'TECHNICIAN_FORBIDDEN') {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error updating work record:', error);
     res.status(500).json({ error: 'Chyba při aktualizaci záznamu' });
   }
@@ -591,6 +685,8 @@ router.post('/:id/status', authMiddleware, authorize('workRecords:write'), async
     if (!existing) {
       return res.status(404).json({ error: 'Záznam nenalezen' });
     }
+
+    ensureTechnicianOwnership(req.user, existing);
 
     await assertPeriodUnlocked(prisma, { month: existing.month, year: existing.year });
 
@@ -622,6 +718,9 @@ router.post('/:id/status', authMiddleware, authorize('workRecords:write'), async
     if (error.code === 'PERIOD_LOCKED') {
       return res.status(423).json({ error: error.message });
     }
+    if (error.code === 'TECHNICIAN_FORBIDDEN') {
+      return res.status(403).json({ error: error.message });
+    }
     console.error('Error updating work record status:', error);
     res.status(500).json({ error: 'Chyba při změně stavu záznamu' });
   }
@@ -637,6 +736,8 @@ router.delete('/:id', authMiddleware, authorize('workRecords:write'), async (req
     if (!existing) {
       return res.status(404).json({ error: 'Záznam nenalezen' });
     }
+
+    ensureTechnicianOwnership(req.user, existing);
 
     await assertPeriodUnlocked(prisma, { month: existing.month, year: existing.year });
 
@@ -656,6 +757,9 @@ router.delete('/:id', authMiddleware, authorize('workRecords:write'), async (req
   } catch (error) {
     if (error.code === 'PERIOD_LOCKED') {
       return res.status(423).json({ error: error.message });
+    }
+    if (error.code === 'TECHNICIAN_FORBIDDEN') {
+      return res.status(403).json({ error: error.message });
     }
     console.error('Error deleting work record:', error);
     res.status(500).json({ error: 'Chyba při mazání záznamu' });

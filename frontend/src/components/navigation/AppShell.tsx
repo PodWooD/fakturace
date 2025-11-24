@@ -27,26 +27,31 @@ import {
   IconUpload,
   IconUsers,
   IconCpu,
+  IconUserCog,
 } from '@tabler/icons-react';
 import { useAuth } from '../../lib/auth-context';
 import { hasPermission, type PermissionKey, type UserRole } from '../../lib/permissions';
+
+type ConcreteRole = Exclude<UserRole, undefined>;
 
 const navLinks: Array<{
   href: string;
   label: string;
   icon: typeof IconHome;
   permission?: PermissionKey;
+  roles?: ConcreteRole[];
 }> = [
-  { href: '/', label: 'Dashboard', icon: IconHome },
-  { href: '/organizations', label: 'Organizace', icon: IconBuilding },
-  { href: '/work-records', label: 'Pracovní záznamy', icon: IconListDetails },
-  { href: '/received-invoices', label: 'Přijaté faktury', icon: IconReceipt2 },
-  { href: '/invoices', label: 'Fakturace', icon: IconFileInvoice },
-  { href: '/hardware', label: 'Hardware', icon: IconCpu },
+  { href: '/', label: 'Dashboard', icon: IconHome, roles: ['ADMIN', 'ACCOUNTANT', 'VIEWER'] },
+  { href: '/organizations', label: 'Organizace', icon: IconBuilding, roles: ['ADMIN', 'ACCOUNTANT', 'VIEWER'] },
+  { href: '/work-records', label: 'Pracovní záznamy', icon: IconListDetails, roles: ['ADMIN', 'ACCOUNTANT', 'TECHNICIAN', 'VIEWER'] },
+  { href: '/received-invoices', label: 'Přijaté faktury', icon: IconReceipt2, roles: ['ADMIN', 'ACCOUNTANT', 'VIEWER'] },
+  { href: '/invoices', label: 'Fakturace', icon: IconFileInvoice, roles: ['ADMIN', 'ACCOUNTANT', 'VIEWER'] },
+  { href: '/hardware', label: 'Hardware', icon: IconCpu, roles: ['ADMIN', 'ACCOUNTANT', 'VIEWER'] },
   { href: '/import', label: 'Import', icon: IconUpload, permission: 'receivedInvoices:ocr' },
   { href: '/export', label: 'Export', icon: IconFileExport, permission: 'invoices:export' },
-  { href: '/reports', label: 'Reporty', icon: IconChartBar },
-  { href: '/billing', label: 'Billing', icon: IconUsers, permission: 'billing:read' },
+  { href: '/reports', label: 'Reporty', icon: IconChartBar, roles: ['ADMIN', 'ACCOUNTANT', 'VIEWER'] },
+  { href: '/billing', label: 'Billing', icon: IconUsers, permission: 'billing:read', roles: ['ADMIN', 'ACCOUNTANT', 'VIEWER'] },
+  { href: '/users', label: 'Uživatelé', icon: IconUserCog, permission: 'users:manage', roles: ['ADMIN'] },
 ];
 
 export const AppShellLayout = ({ children }: { children: React.ReactNode }) => {
@@ -56,6 +61,7 @@ export const AppShellLayout = ({ children }: { children: React.ReactNode }) => {
   const [opened, { toggle }] = useDisclosure(false);
 
   const active = useMemo(() => pathname ?? '/', [pathname]);
+  const role = (user?.role ?? 'VIEWER') as ConcreteRole;
 
   const handleLogout = () => {
     logout();
@@ -92,7 +98,11 @@ export const AppShellLayout = ({ children }: { children: React.ReactNode }) => {
         <AppShell.Section grow component={ScrollArea}>
           <Stack gap="xs">
             {navLinks
-              .filter((link) => (link.permission ? hasPermission(user?.role as UserRole, link.permission) : true))
+              .filter((link) => {
+                const allowedByRole = link.roles ? link.roles.includes(role) : true;
+                const allowedByPermission = link.permission ? hasPermission(role, link.permission) : true;
+                return allowedByRole && allowedByPermission;
+              })
               .map((link) => (
                 <NavLink
                   key={link.href}

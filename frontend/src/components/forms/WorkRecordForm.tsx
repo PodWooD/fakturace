@@ -55,6 +55,8 @@ export type WorkRecordFormProps = {
   onSubmit: (values: WorkRecordFormValues) => Promise<void> | void;
   defaultValues?: Partial<WorkRecordFormValues>;
   isSubmitting?: boolean;
+  lockedWorkerName?: string;
+  isWorkerLocked?: boolean;
 };
 
 export const WorkRecordForm = ({
@@ -62,6 +64,8 @@ export const WorkRecordForm = ({
   onSubmit,
   defaultValues,
   isSubmitting,
+  lockedWorkerName,
+  isWorkerLocked = false,
 }: WorkRecordFormProps) => {
   const {
     register,
@@ -69,6 +73,7 @@ export const WorkRecordForm = ({
     control,
     reset,
     watch,
+    setValue,
     formState: { errors },
   } = useForm<WorkRecordFormValues>({
     resolver: zodResolver(schema),
@@ -93,7 +98,7 @@ export const WorkRecordForm = ({
       reset({
         organizationId: defaultValues.organizationId || '',
         billingOrgId: defaultValues.billingOrgId || '',
-        worker: defaultValues.worker || '',
+        worker: defaultValues.worker || lockedWorkerName || '',
         description: defaultValues.description || '',
         branch: defaultValues.branch || '',
         projectCode: defaultValues.projectCode || '',
@@ -104,7 +109,13 @@ export const WorkRecordForm = ({
         timeTo: defaultValues.timeTo || '',
       });
     }
-  }, [defaultValues, reset]);
+  }, [defaultValues, lockedWorkerName, reset]);
+
+  useEffect(() => {
+    if (isWorkerLocked && lockedWorkerName) {
+      setValue('worker', lockedWorkerName, { shouldValidate: true });
+    }
+  }, [isWorkerLocked, lockedWorkerName, setValue]);
 
   const billingOptions = useMemo(
     () => [{ value: '', label: 'Stejná jako organizace' }, ...organizations],
@@ -147,7 +158,24 @@ export const WorkRecordForm = ({
           )}
         />
         <Group grow align="flex-start">
-          <TextInput label="Technik" withAsterisk {...register('worker')} error={errors.worker?.message} />
+          <Controller
+            control={control}
+            name="worker"
+            render={({ field }) => (
+              <TextInput
+                label="Technik"
+                withAsterisk
+                value={isWorkerLocked ? lockedWorkerName ?? '' : field.value}
+                onChange={(event) => {
+                  if (isWorkerLocked) return;
+                  field.onChange(event.currentTarget.value);
+                }}
+                readOnly={isWorkerLocked}
+                disabled={isWorkerLocked}
+                error={errors.worker?.message}
+              />
+            )}
+          />
           <Controller
             control={control}
             name="date"

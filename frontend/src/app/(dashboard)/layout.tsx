@@ -9,7 +9,7 @@ import { AppShellLayout } from '@/components/navigation/AppShell';
 const publicPaths = ['/login'];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { token, isLoading } = useAuth();
+  const { token, isLoading, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -18,6 +18,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.replace('/login');
     }
   }, [isLoading, token, router, pathname]);
+
+  useEffect(() => {
+    if (!isLoading && token && user?.role === 'TECHNICIAN') {
+      if (pathname && !pathname.startsWith('/work-records')) {
+        router.replace('/work-records');
+      }
+    }
+  }, [isLoading, token, user?.role, pathname, router]);
 
   if (isLoading || (!token && !publicPaths.includes(pathname))) {
     return (
