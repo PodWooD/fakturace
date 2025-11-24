@@ -57,14 +57,29 @@ jobs:
         working-directory: ./frontend
         env:
           NEXT_TELEMETRY_DISABLED: 1
-          # Frontend build často potřebuje env vars (např. API URL).
-          # Zkopírujeme lokální .env z backendu nebo kořene, pokud je to potřeba, 
-          # ale Next.js build by měl projít i bez run-time secrets.
         run: npm run build
 
-      # Restart Application
-      - name: 🚀 Restart PM2
+      - name: 🚚 Deploy to Production Directory
         run: |
-          pm2 restart all
-          pm2 save
-          echo "Deployment successful! 🚀"
+          echo "Syncing files to /opt/fakturace..."
+          # Použijeme rsync pro synchronizaci.
+          # --delete: smaže soubory v cíli, které už nejsou ve zdroji (úklid)
+          # --exclude: vynecháme citlivé soubory a uživatelská data
+          rsync -av --delete \
+            --exclude '.env' \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'uploads' \
+            --exclude 'node_modules' \
+            ./ /opt/fakturace/
+            
+          # Node modules kopírujeme zvlášť nebo necháme instalovat tam?
+          # Protože jsme udělali 'npm ci' v runneru, je bezpečnější je tam taky přesunout,
+          # ale rsync node_modules trvá dlouho. 
+          # Rychlejší je rsyncnout jen app a v /opt/fakturace spustit npm ci (symlinky atd).
+          # Ale pro jednoduchost a jistotu verze teď zkopírujeme i backend/node_modules a frontend/node_modules.
+          
+          rsync -a --delete ./backend/node_modules/ /opt/fakturace/backend/node_modules/
+          rsync -a --delete ./frontend/node_modules/ /opt/fakturace/frontend/node_modules/
+
+      - name: 🚀 Restart PM2
