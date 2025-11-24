@@ -1,64 +1,52 @@
 # Fakturační Systém
 
-Interní systém pro správu faktur, hardware a výkazů práce.
+Komplexní interní systém pro správu IT služeb, fakturace a evidence majetku.
+
+## 🎯 Hlavní Funkce
+
+### 💰 Fakturace a Finance
+*   **Vydané faktury:** Rychlé vystavování faktur, automatické generování PDF s QR kódem.
+*   **Exporty:** Podpora pro účetní systémy (Pohoda XML) a Excel přehledy.
+*   **Statistiky:** Dashboard s přehledem příjmů, neuhrazených faktur a měsíčních obratů.
+
+### 📥 Přijaté Faktury (AI OCR)
+*   **Inteligentní vytěžování:** Nahrání faktury (PDF/Scan) a automatické přečtení dat (IČO, částka, datum, položky) pomocí lokální AI.
+*   **Schvalování:** Workflow pro kontrolu a schválení nákladů.
+
+### ⏱️ Výkazy Práce (Time Tracking)
+*   **Evidence:** Technici vykazují čas, cestovné a použitý materiál u klientů.
+*   **Fakturace:** Jedním kliknutím lze převést schválené výkazy na fakturu pro klienta.
+*   **Přehledy:** Kontrola efektivity a vytížení techniků.
+
+### 🖥️ Hardware a Sklad
+*   **Evidence majetku:** Sledování životního cyklu hardware (nákup -> sklad -> u klienta -> vyřazení).
+*   **Přiřazování:** Historie, kdo měl jaké zařízení kdy přidělené.
+
+### 👥 Správa Klientů
+*   **CRM:** Adresář organizací s kontakty a historií.
+*   **Sazby:** Nastavení individuálních hodinových sazeb a smluvních podmínek.
+
+---
 
 ## 🏗️ Architektura
 - **Backend:** Node.js (Express), Prisma ORM, PostgreSQL, Redis (BullMQ).
 - **Frontend:** Next.js, Mantine UI.
-- **Infrastruktura:** VM 108 (Ubuntu), PM2 Process Manager.
 - **Storage:** Minio (S3 compatible) pro soubory.
 
 ## 🚀 CI/CD a Deployment
-Projekt využívá plně automatizované nasazení pomocí **GitHub Actions** (Self-Hosted Runner na VM 108).
+Projekt využívá plně automatizované nasazení pomocí **GitHub Actions**.
+*   **Produkce:** Push do  -> Auto Deploy na server.
+*   **Verzování:** Sémantické verzování (
+> fakturace-system@1.0.0 release
+> standard-version
 
-### Produkce (`main`)
-- Jakýkoliv push do větve `main` automaticky spustí deploy.
-- **Proces:** Checkout -> Backup DB -> Install -> Build -> Deploy -> Restart PM2.
-- **URL:** http://192.168.250.108:3030
-
-### Vývoj (`develop`)
-- Slouží pro testování nových funkcí před sloučením do main.
-- (V přípravě: Automatický deploy na dev server).
-
-## 📦 Verzování a Release
-Používáme **Sémantické Verzování** (SemVer) a **Conventional Commits**.
-
-### Jak psát commity
-Aby fungovalo automatické generování verzí, dodržujte formát:
-- `feat: popis nové funkce` -> Zvýší verzi o 0.1.0 (Minor)
-- `fix: popis opravy chyby` -> Zvýší verzi o 0.0.1 (Patch)
-- `chore: údržba, refactoring` -> Nemění verzi
-- `BREAKING CHANGE: popis` -> Zvýší verzi o 1.0.0 (Major)
-
-### Jak vydat novou verzi
-Když jsou změny otestované na `main`, spusťte release:
-
-```bash
-# 1. Ujistěte se, že máte aktuální main
-git checkout main
-git pull origin main
-
-# 2. Vytvořit novou verzi (automaticky upraví package.json a CHANGELOG.md)
-npm run release
-
-# 3. Odeslat na GitHub (spustí deploy)
-git push --follow-tags origin main
-```
+✔ bumping version in package.json from 1.0.0 to 1.0.1
+✔ bumping version in package-lock.json from undefined to 1.0.1
+✔ outputting changes to CHANGELOG.md
+✔ committing package-lock.json and package.json and CHANGELOG.md
+✔ tagging release v1.0.1
+ℹ Run `git push --follow-tags origin main && npm publish` to publish) generuje CHANGELOG a tagy.
 
 ## 🛡️ Zálohování
-- **Databáze:** Zálohuje se automaticky každý den ve 02:00 ráno.
-- **Skript:** `/home/fakturace/scripts/backup_db.sh`
-- **Umístění záloh:** `/home/fakturace/backups/postgres/`
-- **Retence:** Uchovává se posledních 7 dní.
+Databáze se zálohuje automaticky každý den ve 02:00 (uchování 7 dní).
 
-## 🛠️ Rychlé příkazy (Server)
-```bash
-# Stav aplikace
-pm2 status
-
-# Logy
-pm2 logs
-
-# Ruční restart
-pm2 restart all
-```
