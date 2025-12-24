@@ -20,7 +20,7 @@ const PERMISSIONS: Record<PermissionKey, Array<'ADMIN' | 'ACCOUNTANT' | 'TECHNIC
   'queues:read': ['ADMIN'],
   'system:audit': ['ADMIN'],
   'accounting:lock': ['ADMIN'],
-  'billing:write': ['ADMIN'],
+  'billing:write': ['ADMIN', 'ACCOUNTANT'],
   'billing:read': ['ADMIN', 'ACCOUNTANT', 'VIEWER'],
   'invoices:generate': ['ADMIN'],
   'invoices:delete': ['ADMIN'],

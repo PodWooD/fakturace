@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {
   calculateInvoiceTotals,
   roundCurrency
-} = require('../src/services/invoiceTotals');
+} = require('../dist/services/invoiceTotals');
 
 test('calculateInvoiceTotals sums work, km, services and hardware correctly', () => {
   const organization = {

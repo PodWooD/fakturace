@@ -2,7 +2,7 @@ const { PrismaClient, UserRole } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 
-const { toCents } = require(path.join(__dirname, '../src/utils/money'));
+const { toCents } = require(path.join(__dirname, '../dist/utils/money'));
 
 const prisma = new PrismaClient();
 

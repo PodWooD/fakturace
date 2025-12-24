@@ -44,7 +44,8 @@ async function setupTestEnvironment(suiteName) {
 
   // Načti aplikaci až po nastavení env proměnných
   // (zajistí, že Prisma používá izolovanou DB)
-  const app = require('../../src/app');
+  // Use dist/app because we are using TypeScript implementation
+  const app = require('../../dist/app').default;
   const request = supertest(app);
 
   const cleanup = async () => {
