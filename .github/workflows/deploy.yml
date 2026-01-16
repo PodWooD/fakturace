@@ -83,3 +83,8 @@ jobs:
           rsync -a --delete ./frontend/node_modules/ /opt/fakturace/frontend/node_modules/
 
       - name: 🚀 Restart PM2
+        run: |
+          cd /opt/fakturace
+          pm2 restart ecosystem.config.js --update-env || pm2 start ecosystem.config.js
+          pm2 save
+          echo "✅ PM2 services restarted successfully"
