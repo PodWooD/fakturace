@@ -37,11 +37,15 @@ jobs:
       # Backend Setup
       - name: 📦 Install Backend Dependencies
         working-directory: ./backend
-        run: npm ci --omit=dev
+        run: npm ci
 
       - name: 🗄️ Generate Prisma Client
         working-directory: ./backend
         run: npx prisma generate
+
+      - name: 🔨 Build Backend (TypeScript)
+        working-directory: ./backend
+        run: npm run build
 
       - name: 🗄️ Run Database Migrations
         working-directory: ./backend
