@@ -45,8 +45,12 @@ jobs:
 
       - name: 🗄️ Run Database Migrations
         working-directory: ./backend
-        # Prisma automaticky načte .env ze složky, pokud existuje
-        run: npx prisma migrate deploy
+        run: |
+          # Load DATABASE_URL from production .env
+          if [ -f "/opt/fakturace/backend/.env" ]; then
+            export $(grep -E '^DATABASE_URL=' /opt/fakturace/backend/.env | xargs)
+          fi
+          npx prisma migrate deploy
 
       # Frontend Setup
       - name: 📦 Install Frontend Dependencies
